@@ -1,0 +1,11 @@
+{
+  "timestamp_utc": "2026-03-16T16:00:00Z",
+  "epoch": 2461,
+  "regime": "Elevated Fragility",
+  "action_policy": {
+    "allow_new_risk": true,
+    "allow_risk_reduction": true,
+    "allow_position_increase": false,
+    "allow_position_decrease": true
+  }
+}

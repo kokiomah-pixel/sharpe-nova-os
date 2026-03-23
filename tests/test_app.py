@@ -102,6 +102,27 @@ def test_health_is_public(client):
     assert response.json() == {"status": "ok"}
 
 
+def test_context_includes_guardrail_action_policy(client):
+    """Verify /v1/context always includes canonical guardrail.action_policy keys."""
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+    assert response.status_code == 200
+
+    payload = response.json()
+    assert "guardrail" in payload
+    assert "action_policy" in payload["guardrail"]
+
+    action_policy = payload["guardrail"]["action_policy"]
+    assert "allow_new_risk" in action_policy
+    assert "allow_risk_reduction" in action_policy
+    assert "allow_position_increase" in action_policy
+    assert "allow_position_decrease" in action_policy
+
+
 # Test B: Billable endpoints increment usage
 def test_billable_endpoints_increment_usage(client):
     """Verify billable endpoints (/v1/context, /v1/regime, /v1/epoch) increment usage."""
