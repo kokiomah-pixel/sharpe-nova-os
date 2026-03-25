@@ -14,6 +14,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def get_current_timestamp() -> str:
+    fixed = os.getenv("NOVA_TIMESTAMP_UTC")
+    if fixed:
+        return fixed
+    return datetime.now(timezone.utc).isoformat()
+
+
+def get_current_epoch() -> int:
+    fixed = os.getenv("NOVA_EPOCH")
+    if fixed:
+        return int(fixed)
+    now = datetime.now(timezone.utc)
+    return int(now.timestamp() // 3600)  # hourly epoch bucket
+
 app = FastAPI(
     title="Sharpe Nova OS API",
     version="1.1.0",
@@ -22,8 +37,6 @@ app = FastAPI(
 
 SIGNING_SECRET = os.getenv("NOVA_SIGNING_SECRET", "replace_me")
 CONSTITUTION_VERSION = os.getenv("NOVA_CONSTITUTION_VERSION", "v1.0")
-DEFAULT_EPOCH = int(os.getenv("NOVA_EPOCH", "2461"))
-DEFAULT_TIMESTAMP = os.getenv("NOVA_TIMESTAMP_UTC", "2026-03-16T16:00:00Z")
 DEFAULT_REGIME = os.getenv("NOVA_REGIME", "Elevated Fragility")
 
 # Backward compatibility for your current single-key setup
@@ -409,10 +422,12 @@ def get_regime(
     authorization: Optional[str] = Header(default=None)
 ) -> JSONResponse:
     entitlement = require_entitlement(request, authorization)
+    epoch = get_current_epoch()
+    timestamp = get_current_timestamp()
 
     payload = {
-        "epoch": DEFAULT_EPOCH,
-        "timestamp_utc": DEFAULT_TIMESTAMP,
+        "epoch": epoch,
+        "timestamp_utc": timestamp,
         "regime": DEFAULT_REGIME,
         "constitution_version": CONSTITUTION_VERSION,
         "tier": entitlement["tier"],
@@ -427,14 +442,16 @@ def get_epoch(
     authorization: Optional[str] = Header(default=None)
 ) -> JSONResponse:
     entitlement = require_entitlement(request, authorization)
+    epoch = get_current_epoch()
+    timestamp = get_current_timestamp()
 
     payload = {
-        "epoch": DEFAULT_EPOCH,
-        "timestamp_utc": DEFAULT_TIMESTAMP,
+        "epoch": epoch,
+        "timestamp_utc": timestamp,
         "constitution_version": CONSTITUTION_VERSION,
         "hash": epoch_hash(
-            DEFAULT_EPOCH,
-            DEFAULT_TIMESTAMP,
+            epoch,
+            timestamp,
             CONSTITUTION_VERSION,
             DEFAULT_REGIME
         ),
@@ -455,10 +472,12 @@ def get_context(
     strategy: Optional[str] = Query(default=None),
 ) -> JSONResponse:
     entitlement = require_entitlement(request, authorization)
+    epoch = get_current_epoch()
+    timestamp = get_current_timestamp()
 
     payload = {
-        "epoch": DEFAULT_EPOCH,
-        "timestamp_utc": DEFAULT_TIMESTAMP,
+        "epoch": epoch,
+        "timestamp_utc": timestamp,
         "regime": DEFAULT_REGIME,
         "guardrail": build_guardrail(intent=intent, asset=asset, size=size),
         "memory_context": build_memory_context(),

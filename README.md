@@ -389,6 +389,27 @@ Run the same scenarios under different regimes to observe:
 
 ---
 
+## Live vs Fixed Mode
+
+Nova operates in two modes depending on environment configuration.
+
+### Live Mode (default)
+
+- `timestamp_utc` updates on every request
+- `epoch` updates automatically (hourly bucket)
+- reflects current system conditions in real time
+
+This is the default production behavior.
+
+### Fixed Mode (for testing and evidence)
+
+You can override time using environment variables:
+
+```bash
+export NOVA_TIMESTAMP_UTC="2026-03-16T16:00:00Z"
+export NOVA_EPOCH=2461
+```
+
 ## Evidence
 
 Controlled behavior evidence is documented in [`NOVA_EVIDENCE_PACK_V1.md`](NOVA_EVIDENCE_PACK_V1.md).
