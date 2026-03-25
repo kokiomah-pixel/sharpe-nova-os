@@ -145,6 +145,20 @@ If your agent cannot determine whether it is *allowed* to increase risk before a
 
 ---
 
+## Check Your System
+
+Before integrating anything, answer this:
+
+- Does your system know when it should NOT increase risk?
+- Does it change execution size based on regime?
+- Would it behave differently in Stress vs Stable?
+
+If the answer to any of these is “no”:
+
+Your system is executing with no control layer.
+
+---
+
 ## Next Step
 
 Run the comparison script. See your own output.
