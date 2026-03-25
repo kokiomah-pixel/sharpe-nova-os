@@ -47,7 +47,7 @@ def is_risk_increasing_intent(intent: str) -> bool:
     return intent in {"trade", "deploy_liquidity", "open_position", "increase_position"}
 
 
-def run_with_nova(scenario: Scenario) -> Dict[str, str]:
+def run_with_nova(scenario: Scenario) -> Dict[str, Any]:
     context = fetch_nova_context(scenario)
 
     regime = context.get("regime", "Unknown")
@@ -82,8 +82,8 @@ def run_with_nova(scenario: Scenario) -> Dict[str, str]:
     }
 
 
-def print_scenario_comparison(scenario: Scenario) -> Dict[str, str]:
-    print("=" * 50)
+def print_scenario_comparison(scenario: Scenario) -> Dict[str, Any]:
+    print("=" * 60)
     print(f"Scenario: {scenario.intent} | {scenario.asset} | {scenario.size:g}")
     print()
 
@@ -128,7 +128,7 @@ def print_scenario_comparison(scenario: Scenario) -> Dict[str, str]:
         print(f"- Nova Decision: {with_nova['decision']}")
         print(f"- Reason: {with_nova['reason']}")
 
-    print("=" * 50)
+    print("=" * 60)
     return {
         "without_nova_decision": without_nova["decision"],
         "with_nova_decision": with_nova["decision"],
@@ -192,6 +192,7 @@ def main() -> None:
     print()
     print("Conclusion:")
     print(f"Nova changed execution behavior in {changed_behavior_count}/{n} scenarios.")
+    print(f"Nova validated execution in {validated_behavior_count}/{n} scenarios.")
 
 
 if __name__ == "__main__":
