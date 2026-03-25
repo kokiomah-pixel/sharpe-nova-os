@@ -336,6 +336,53 @@ It shows exactly how execution changes when Nova is in the loop.
 
 ---
 
+## Same System. Different Execution.
+
+Nova does not change your strategy.
+
+It changes how your system executes based on regime.
+
+The same agent, the same inputs, produces different outcomes depending on system conditions.
+
+### Example — Same Trade, Different Regimes
+
+| Regime | Decision | Execution |
+|--------|----------|-----------|
+| **Stress** | VETO | No execution (0%) |
+| **Elevated Fragility** | CONSTRAIN | Reduced size (50%) |
+| **Stable** | ALLOW | Full execution (100%) |
+
+### What This Means
+
+Without Nova:
+- execution is constant
+- systems apply the same behavior regardless of conditions
+
+With Nova:
+- execution becomes state-dependent
+- systems automatically adapt to environment conditions
+- capital deployment becomes conditional, not fixed
+
+Nova is not a throttle.
+
+It is a regime-aware execution layer.
+
+---
+
+### Reference
+
+See:
+
+`examples/nova_comparison_agent.py`
+
+Run the same scenarios under different regimes to observe:
+
+- full execution (Stable)
+- reduced execution (Elevated Fragility)
+- blocked execution (Stress)
+
+---
+
 ## Evidence
 
 Controlled behavior evidence is documented in [`NOVA_EVIDENCE_PACK_V1.md`](NOVA_EVIDENCE_PACK_V1.md).
