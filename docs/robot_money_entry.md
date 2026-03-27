@@ -1,6 +1,6 @@
-# Your Agent Is Executing Without a Control Layer
+# Your Trading Agent Has No Risk Brake. Nova OS Adds One.
 
-If your system moves capital without checking whether it *should*, it is executing unconditionally.
+If your system can move capital without checking whether it is *allowed* under the current regime, it is executing unconditionally.
 
 Run this:
 
