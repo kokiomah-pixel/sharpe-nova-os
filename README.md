@@ -1,12 +1,14 @@
 # Sharpe Nova OS
 
 Sharpe Nova OS is a pre-execution decision discipline layer for autonomous capital systems.
-It conditions decisions before capital moves, ensuring they are coherent, constrained, and explainable.
+It conditions decisions before capital moves, ensuring they are coherent, constrained, and explainable under consistent rules.
+
+This positions Nova as a decision discipline layer for autonomous capital systems.
 
 ## What Nova Is
 
 Nova is a callable API that evaluates decision context before execution.
-It returns structured, neutral outputs for trading systems, agent workflows, and governance processes.
+It returns structured, neutral outputs that can be used in trading systems, agent workflows, and governance processes.
 
 ## What Nova Is Not
 
@@ -16,7 +18,7 @@ It returns structured, neutral outputs for trading systems, agent workflows, and
 - Not a hedge fund
 - Not an execution layer
 
-Nova does not generate trades.
+Nova does not generate trades or execution signals.
 Nova conditions the decision context in which trades are made.
 
 ## The Shift
@@ -26,14 +28,14 @@ Execution is no longer the constraint.
 
 Decision coherence is.
 
-Nova operates at this layer, conditioning decisions before execution.
+Nova operates at this layer and conditions decisions before execution.
 
 ## System Position
 
 ```text
 [ Strategy / Agent Layer ]
             ↓
-[ Nova OS — Decision Constraint Layer ]
+[ Nova OS — Pre-Execution Decision Constraint Layer ]
             ↓
 [ Execution Layer ]
 ```
@@ -49,18 +51,25 @@ Nova operates at this layer, conditioning decisions before execution.
 - Recommendation
 - Decision Status
 
-All outputs are structured, neutral, and designed for institutional decision workflows.
+This structure is invariant across all Nova responses.
+
+All outputs follow a fixed structure, are neutral in tone, and are designed for institutional decision workflows.
+It is designed to be readable in real time and defensible in governance settings.
 
 ## Verifiability
 
 Nova outputs are designed to be verifiable.
 
-Decisions can be cryptographically attested to ensure:
+Decisions can be anchored to cryptographic attestations that ensure:
 - consistent inputs
 - applied constraints
 - no post-generation modification
 
-Attestation infrastructure is introduced separately.
+This repository focuses on the decision layer.
+
+Attestation infrastructure is introduced separately and is not implemented here.
+
+Verifiability is designed to ensure decision integrity without exposing strategy details.
 
 ## Quick Integration
 
@@ -68,6 +77,8 @@ Attestation infrastructure is introduced separately.
 2. Send it to Nova API
 3. Receive structured decision output
 4. Apply constraints before execution
+
+Nova can be inserted as a pre-execution checkpoint in any existing workflow.
 
 ## Captured Example
 
@@ -80,6 +91,9 @@ WITH NOVA (Configured Decision Regime: Elevated Fragility)
 - Decision: CONSTRAIN
 - Executed size: 40,250
 - Reason: position increase blocked
+
+Without Nova, decisions are evaluated in isolation.
+With Nova, decisions are evaluated under consistent constraints.
 
 ## Run This First
 

@@ -52,6 +52,7 @@ def run_with_nova(scenario: Scenario) -> Dict[str, Any]:
 
     regime = context.get("regime", "Unknown")
     action_policy = context.get("guardrail", {}).get("action_policy", {})
+    memory_context = context.get("memory_context", {})
 
     allow_new_risk = bool(action_policy.get("allow_new_risk", False))
     allow_position_increase = bool(action_policy.get("allow_position_increase", False))
@@ -60,78 +61,107 @@ def run_with_nova(scenario: Scenario) -> Dict[str, Any]:
         decision = "VETO"
         executed_size = 0.0
         reason = "new risk not allowed"
-        result = "Action blocked by Nova guardrail"
+        recommendation = "Do not initiate new risk. Reduce or exit existing exposure."
     elif not allow_position_increase and is_risk_increasing_intent(scenario.intent):
         executed_size = max(scenario.size * 0.5, 1)
         decision = "CONSTRAIN"
         reason = "position increase blocked"
-        result = f"{scenario.intent} executes at reduced size ({executed_size:g} vs {scenario.size:g})"
+        recommendation = "Constrain exposure size and avoid position increases."
     else:
         executed_size = scenario.size
         decision = "ALLOW"
         reason = "execution validated"
-        result = f"{scenario.intent} executes at full size ({scenario.size:g})"
+        recommendation = "Proceed under local controls."
+
+    decision_context = {
+        "intent": scenario.intent,
+        "asset": scenario.asset,
+        "requested_size": scenario.size,
+        "configured_decision_regime": regime,
+        "timestamp_utc": context.get("timestamp_utc"),
+    }
+    constraint_analysis = {
+        "action_policy": action_policy,
+        "reason": reason,
+    }
+    impact_on_outcomes = {
+        "requested_size": scenario.size,
+        "executed_size": executed_size,
+    }
 
     return {
-        "regime": regime,
-        "action_policy": json.dumps(action_policy, indent=2, sort_keys=True),
-        "decision": decision,
+        "decision_context": decision_context,
+        "constraint_analysis": constraint_analysis,
+        "historical_reference": memory_context,
+        "impact_on_outcomes": impact_on_outcomes,
+        "recommendation": recommendation,
+        "decision_status": decision,
         "executed_size": executed_size,
         "reason": reason,
-        "result": result,
+        "raw_action_policy": json.dumps(action_policy, indent=2, sort_keys=True),
     }
 
 
 def print_scenario_comparison(scenario: Scenario) -> Dict[str, Any]:
     print("=" * 60)
-    print(f"Scenario: {scenario.intent} | {scenario.asset} | {scenario.size:g}")
+    print("Scenario: Allocation decision under changing conditions")
+    print(f"Input: {scenario.intent} | {scenario.asset} | {scenario.size:g}")
     print()
 
     without_nova = run_without_nova(scenario)
-    print("WITHOUT NOVA")
-    print(f"Decision: {without_nova['decision']}")
-    print(f"Result: {without_nova['result']}")
+    print("WITHOUT NOVA:")
+    print("Decision executed directly.")
+    print("No constraint validation.")
+    print("No historical reference.")
+    print("No consistency enforcement.")
+    print("Decision quality depends entirely on local logic.")
     print()
 
-    print("WITH NOVA")
+    print("WITH NOVA:")
     try:
         with_nova = run_with_nova(scenario)
-        print(f"Regime: {with_nova['regime']}")
-        print(f"Action Policy: {with_nova['action_policy']}")
-        print(f"Decision: {with_nova['decision']}")
-        print(f"Result: {with_nova['result']}")
-        print()
-        print("Nova Decision Impact")
-        print(f"- Requested Size: {scenario.size:g}")
-        executed_size = with_nova['executed_size']
-        print(f"- Executed Size: {executed_size:g}" if executed_size > 0 else "- Executed Size: 0 (blocked)")
-        print(f"- Nova Regime: {with_nova['regime']}")
-        print(f"- Nova Decision: {with_nova['decision']}")
-        print(f"- Reason: {with_nova['reason']}")
+        print(f"Decision Context: {json.dumps(with_nova['decision_context'], sort_keys=True)}")
+        print(f"Constraint Analysis: {json.dumps(with_nova['constraint_analysis'], sort_keys=True)}")
+        print(f"Historical Reference: {json.dumps(with_nova['historical_reference'], sort_keys=True)}")
+        print(f"Impact on Outcomes: {json.dumps(with_nova['impact_on_outcomes'], sort_keys=True)}")
+        print(f"Recommendation: {with_nova['recommendation']}")
+        print(f"Decision Status: {with_nova['decision_status']}")
     except Exception as exc:
         # Fail-safe behavior is explicit so demo output stays understandable.
         with_nova = {
-            "decision": "VETO",
+            "decision_status": "VETO",
             "executed_size": 0.0,
             "reason": f"Nova context unavailable ({exc})",
-            "result": f"Failed to fetch Nova context ({exc})",
+            "decision_context": {"status": "unavailable"},
+            "constraint_analysis": {"status": "unavailable"},
+            "historical_reference": {"status": "unavailable"},
+            "impact_on_outcomes": {"requested_size": scenario.size, "executed_size": 0.0},
+            "recommendation": f"Failed to fetch Nova context ({exc})",
         }
-        print("Regime: Unknown")
-        print("Action Policy: unavailable")
-        print(f"Decision: {with_nova['decision']}")
-        print(f"Result: {with_nova['result']}")
-        print()
-        print("Nova Decision Impact")
-        print(f"- Requested Size: {scenario.size:g}")
-        print("- Executed Size: 0 (blocked)")
-        print("- Nova Regime: Unknown")
-        print(f"- Nova Decision: {with_nova['decision']}")
-        print(f"- Reason: {with_nova['reason']}")
+        print(f"Decision Context: {json.dumps(with_nova['decision_context'], sort_keys=True)}")
+        print(f"Constraint Analysis: {json.dumps(with_nova['constraint_analysis'], sort_keys=True)}")
+        print(f"Historical Reference: {json.dumps(with_nova['historical_reference'], sort_keys=True)}")
+        print(f"Impact on Outcomes: {json.dumps(with_nova['impact_on_outcomes'], sort_keys=True)}")
+        print(f"Recommendation: {with_nova['recommendation']}")
+        print(f"Decision Status: {with_nova['decision_status']}")
+
+    print()
+    print("---")
+    print("Comparison:")
+    print("Without Nova -> decision evaluated in isolation")
+    print("With Nova -> decision evaluated under consistent constraints")
+    print()
+    print("Implication:")
+    print("Without Nova -> decision quality is inconsistent")
+    print("With Nova -> decision quality is standardized")
+    print()
+    print("Nova does not change the decision.")
+    print("It changes how the decision is made.")
 
     print("=" * 60)
     return {
         "without_nova_decision": without_nova["decision"],
-        "with_nova_decision": with_nova["decision"],
+        "with_nova_decision": with_nova["decision_status"],
         "requested_size": scenario.size,
         "executed_size_without_nova": scenario.size,
         "executed_size_with_nova": with_nova.get("executed_size", 0.0),
