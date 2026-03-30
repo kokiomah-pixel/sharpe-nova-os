@@ -3,8 +3,6 @@
 Sharpe Nova OS is a pre-execution decision discipline layer for autonomous capital systems.
 It conditions decisions before capital moves, ensuring they are coherent, constrained, and explainable under consistent rules.
 
-This positions Nova as a decision discipline layer for autonomous capital systems.
-
 ## What Nova Is
 
 Nova is a callable API that evaluates decision context before execution.
@@ -28,7 +26,7 @@ Execution is no longer the constraint.
 
 Decision coherence is.
 
-Nova operates at this layer and conditions decisions before execution.
+Nova operates at this layer.
 
 ## Reference
 
@@ -62,7 +60,7 @@ Nova operates at this layer and conditions decisions before execution.
 This structure is invariant across all Nova responses.
 
 All outputs follow a fixed structure, are neutral in tone, and are designed for institutional decision workflows.
-It is designed to be readable in real time and defensible in governance settings.
+They are readable in real time and defensible in governance settings.
 
 ### API Contract (Simplified)
 
@@ -93,22 +91,24 @@ Verifiability is designed to ensure decision integrity without exposing strategy
 3. Receive structured decision output
 4. Apply constraints before execution
 
-Nova can be inserted as a pre-execution checkpoint in any existing workflow.
+This establishes Nova as a pre-execution checkpoint in any decision workflow.
 
 ## Captured Example
 
 This is a captured example for demonstration purposes, not a live output.
 
-WITHOUT NOVA
+**WITHOUT NOVA**
 - Executed size: 80,500
 
-WITH NOVA (Configured Decision Regime: Elevated Fragility)
+**WITH NOVA (Configured Decision Regime: Elevated Fragility)**
 - Decision: CONSTRAIN
 - Executed size: 40,250
 - Reason: position increase blocked
 
-Without Nova, decisions are evaluated in isolation.
-With Nova, decisions are evaluated under consistent constraints.
+---
+
+Without Nova -> decisions are evaluated in isolation
+With Nova -> decisions are evaluated under consistent constraints
 
 ## Run This First
 
@@ -196,10 +196,10 @@ Evidence was captured under controlled conditions with locked epoch, configured 
 
 ## Notes
 
-- Payload signatures are HMAC-SHA256 using `NOVA_SIGNING_SECRET` (default: `replace_me`).
-- Usage state defaults to `.usage.json` and can be overridden via `NOVA_USAGE_FILE`.
-- For shared deployments, set `NOVA_REDIS_URL` for centralized usage/quota/rate-limit state.
-- Default configured decision regime and time controls: `NOVA_REGIME`, `NOVA_EPOCH`, `NOVA_TIMESTAMP_UTC`, `NOVA_CONSTITUTION_VERSION`.
+- Payload signatures: HMAC-SHA256 using `NOVA_SIGNING_SECRET`
+- Usage state: `.usage.json` (override via `NOVA_USAGE_FILE`)
+- Shared deployments: use `NOVA_REDIS_URL`
+- Core config: `NOVA_REGIME`, `NOVA_EPOCH`, `NOVA_TIMESTAMP_UTC`, `NOVA_CONSTITUTION_VERSION`
 
 ---
 
