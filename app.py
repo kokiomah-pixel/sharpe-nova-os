@@ -2,8 +2,10 @@ import json
 import os
 import hmac
 import hashlib
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Optional, Dict, Any
 
 import redis
@@ -11,7 +13,18 @@ import fakeredis
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-from key_manager import generate_api_key, store_key, load_keys
+from key_manager import (
+    activate_or_renew_key,
+    deactivate_key_by_stripe_customer_id,
+    deactivate_keys_for_owner,
+    find_key_by_owner,
+    find_key_by_stripe_customer_id,
+    generate_api_key,
+    load_keys,
+    store_key,
+    suspend_key_by_stripe_customer_id,
+    suspend_keys_for_owner,
+)
 
 try:
     import stripe
@@ -70,6 +83,9 @@ REDIS_CLIENT: Optional[redis.Redis] = None
 # {"window_seconds": 60, "max_calls": 30}
 RATE_LIMIT_STATE: Dict[str, Dict[str, Any]] = {}
 PROCESSED_EVENTS = set()
+PROCESSED_EVENTS_FILE = Path(os.getenv("STRIPE_PROCESSED_EVENTS_FILE", ".stripe_events.json")).expanduser()
+PROCESSED_EVENTS_LOCK = Lock()
+STRIPE_AUDIT_FILE = Path(os.getenv("NOVA_STRIPE_AUDIT_FILE", "stripe_webhook_audit.jsonl")).expanduser()
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -79,6 +95,69 @@ PRICE_ENTERPRISE_ID = os.getenv("STRIPE_PRICE_ENTERPRISE_ID", "price_enterprise_
 
 if stripe and STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
+
+
+def _load_processed_events() -> set[str]:
+    if not PROCESSED_EVENTS_FILE.exists():
+        return set()
+    try:
+        raw = json.loads(PROCESSED_EVENTS_FILE.read_text(encoding="utf-8"))
+        if isinstance(raw, list):
+            return {str(item) for item in raw if item}
+    except Exception:
+        return set()
+    return set()
+
+
+def _persist_processed_events(events: set[str]) -> None:
+    PROCESSED_EVENTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PROCESSED_EVENTS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(events), indent=2), encoding="utf-8")
+    tmp.replace(PROCESSED_EVENTS_FILE)
+
+
+def _is_duplicate_event(event_id: str) -> bool:
+    with PROCESSED_EVENTS_LOCK:
+        if event_id in PROCESSED_EVENTS:
+            return True
+        PROCESSED_EVENTS.add(event_id)
+        _persist_processed_events(PROCESSED_EVENTS)
+        return False
+
+
+PROCESSED_EVENTS.update(_load_processed_events())
+
+
+def log_stripe_audit(
+    *,
+    event_id: str,
+    event_type: str,
+    customer_email: str = "",
+    stripe_customer_id: str = "",
+    action: str,
+    result: str,
+    api_key: str = "",
+    tier: str = "",
+    reason: str = "",
+) -> None:
+    entry = {
+        "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "event_id": event_id,
+        "event_type": event_type,
+        "customer_email": customer_email,
+        "stripe_customer_id": stripe_customer_id,
+        "action": action,
+        "result": result,
+        "api_key": api_key,
+        "tier": tier,
+        "reason": reason,
+    }
+    try:
+        STRIPE_AUDIT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with STRIPE_AUDIT_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, sort_keys=True) + "\n")
+    except Exception as exc:
+        print(f"[WARN] Stripe audit log write failed: {exc}", file=sys.stderr)
 
 
 def _get_redis_client() -> Optional[redis.Redis]:
@@ -269,7 +348,7 @@ def get_key_record(api_key: str) -> Dict[str, Any]:
 
     record = registry[api_key]
 
-    if record.get("status") != "active":
+    if (record.get("status") or "").lower() != "active":
         raise HTTPException(status_code=403, detail="Inactive API key")
 
     return record
@@ -478,53 +557,286 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid webhook: {exc}")
 
-    event_id = event.get("id")
-    if event_id in PROCESSED_EVENTS:
+    event_id = str(event.get("id") or "")
+    if event_id and _is_duplicate_event(event_id):
         print(f"[DUPLICATE EVENT] {event_id}")
+        log_stripe_audit(
+            event_id=event_id,
+            event_type=str(event.get("type") or ""),
+            action="ignore_event",
+            result="duplicate",
+        )
         return JSONResponse({"status": "duplicate", "event_id": event_id})
-    if event_id:
-        PROCESSED_EVENTS.add(event_id)
 
     event_type = event.get("type")
     created_key: Optional[str] = None
     created_tier: Optional[str] = None
-    customer_email: Optional[str] = None
+    status: str = "success"
+    reason: Optional[str] = None
 
-    if event_type in {"checkout.session.completed", "invoice.payment_succeeded"}:
+    if event_type in {
+        "checkout.session.completed",
+        "invoice.payment_succeeded",
+        "invoice.payment_failed",
+        "customer.subscription.deleted",
+        "customer.subscription.updated",
+    }:
         obj = event.get("data", {}).get("object", {})
         customer_email = (
             obj.get("customer_details", {}).get("email")
             or obj.get("customer_email")
             or "stripe_customer"
-        )
-        customer_email = customer_email.strip().lower()
+        ).strip().lower()
+        stripe_customer_id = obj.get("customer")
+        stripe_subscription_id = obj.get("subscription")
 
-        price_id = ""
-        try:
-            if event_type == "checkout.session.completed":
-                session_id = obj.get("id")
-                line_items = stripe.checkout.Session.list_line_items(session_id, limit=1)
-                if not line_items or not line_items.data:
-                    print("[ERROR] No line items found")
-                    return JSONResponse({"status": "error", "reason": "no_line_items"})
-                price_id = (line_items.data[0].get("price") or {}).get("id", "")
-            else:
-                lines = obj.get("lines", {}).get("data", [])
-                if lines:
-                    price_id = (lines[0].get("price") or {}).get("id", "")
-        except Exception:
+        if event_type in {"checkout.session.completed", "invoice.payment_succeeded"}:
             price_id = ""
+            try:
+                if event_type == "checkout.session.completed":
+                    session_id = obj.get("id")
+                    line_items = stripe.checkout.Session.list_line_items(session_id, limit=1)
+                    if not line_items or not line_items.data:
+                        print("[ERROR] No line items found")
+                        log_stripe_audit(
+                            event_id=event_id,
+                            event_type=event_type,
+                            customer_email=customer_email,
+                            stripe_customer_id=str(stripe_customer_id or ""),
+                            action="ignore_event",
+                            result="no_line_items",
+                            reason="no_line_items",
+                        )
+                        return JSONResponse({"status": "error", "reason": "no_line_items"})
+                    price_id = (line_items.data[0].get("price") or {}).get("id", "")
+                else:
+                    lines = obj.get("lines", {}).get("data", [])
+                    if not lines:
+                        print("[ERROR] Missing invoice line items")
+                        log_stripe_audit(
+                            event_id=event_id,
+                            event_type=event_type,
+                            customer_email=customer_email,
+                            stripe_customer_id=str(stripe_customer_id or ""),
+                            action="ignore_event",
+                            result="missing_price_id",
+                            reason="missing_invoice_line_items",
+                        )
+                        return JSONResponse({"status": "error", "reason": "missing_price_id"})
+                    price_id = (lines[0].get("price") or {}).get("id", "")
+            except Exception as exc:
+                print(f"[ERROR] Stripe line item resolution failed: {exc}")
+                log_stripe_audit(
+                    event_id=event_id,
+                    event_type=event_type,
+                    customer_email=customer_email,
+                    stripe_customer_id=str(stripe_customer_id or ""),
+                    action="ignore_event",
+                    result="price_lookup_failed",
+                    reason=str(exc),
+                )
+                return JSONResponse({"status": "error", "reason": "price_lookup_failed"})
 
-        created_tier = map_price_to_tier(price_id)
-        created_key = generate_api_key()
-        store_key(created_key, created_tier, owner=customer_email)
-        print(f"[STRIPE] {customer_email} -> {created_key} ({created_tier})")
+            if not price_id:
+                log_stripe_audit(
+                    event_id=event_id,
+                    event_type=event_type,
+                    customer_email=customer_email,
+                    stripe_customer_id=str(stripe_customer_id or ""),
+                    action="ignore_event",
+                    result="missing_price_id",
+                    reason="missing_price_id",
+                )
+                return JSONResponse({"status": "error", "reason": "missing_price_id"})
+
+            created_tier = map_price_to_tier(price_id)
+            if created_tier == "free":
+                log_stripe_audit(
+                    event_id=event_id,
+                    event_type=event_type,
+                    customer_email=customer_email,
+                    stripe_customer_id=str(stripe_customer_id or ""),
+                    action="ignore_event",
+                    result="unmapped_price_id",
+                    reason=f"unmapped_price_id:{price_id}",
+                )
+                return JSONResponse({
+                    "status": "error",
+                    "reason": "unmapped_price_id",
+                    "price_id": price_id,
+                })
+
+            existing_key = (
+                find_key_by_stripe_customer_id(stripe_customer_id)
+                or find_key_by_owner(customer_email)
+            )
+            if existing_key:
+                activate_or_renew_key(
+                    existing_key,
+                    created_tier,
+                    stripe_customer_id=stripe_customer_id,
+                    stripe_subscription_id=stripe_subscription_id,
+                    stripe_price_id=price_id,
+                )
+                created_key = existing_key
+                log_stripe_audit(
+                    event_id=event_id,
+                    event_type=event_type,
+                    customer_email=customer_email,
+                    stripe_customer_id=str(stripe_customer_id or ""),
+                    action="renew_key",
+                    result="success",
+                    api_key=created_key,
+                    tier=created_tier,
+                )
+            else:
+                if event_type == "invoice.payment_succeeded":
+                    print(f"[ERROR] No existing key for owner on renewal: {customer_email}")
+                    log_stripe_audit(
+                        event_id=event_id,
+                        event_type=event_type,
+                        customer_email=customer_email,
+                        stripe_customer_id=str(stripe_customer_id or ""),
+                        action="renew_key",
+                        result="not_found",
+                        tier=created_tier,
+                        reason="no_existing_key_for_owner",
+                    )
+                    return JSONResponse({"status": "error", "reason": "no_existing_key_for_owner"})
+
+                created_key = generate_api_key()
+                store_key(
+                    created_key,
+                    created_tier,
+                    owner=customer_email,
+                    stripe_customer_id=stripe_customer_id,
+                    stripe_subscription_id=stripe_subscription_id,
+                    stripe_price_id=price_id,
+                    status="active",
+                    last_paid_at=datetime.now(timezone.utc).isoformat(),
+                )
+                log_stripe_audit(
+                    event_id=event_id,
+                    event_type=event_type,
+                    customer_email=customer_email,
+                    stripe_customer_id=str(stripe_customer_id or ""),
+                    action="create_key",
+                    result="success",
+                    api_key=created_key,
+                    tier=created_tier,
+                )
+
+            print(f"[STRIPE] {customer_email} -> {created_key} ({created_tier})")
+
+        elif event_type == "invoice.payment_failed":
+            suspended = False
+            if stripe_customer_id:
+                suspended = suspend_key_by_stripe_customer_id(stripe_customer_id)
+            if not suspended and customer_email:
+                suspended = suspend_keys_for_owner(customer_email) > 0
+            print(f"[STRIPE] payment_failed -> suspended access for {customer_email}")
+            log_stripe_audit(
+                event_id=event_id,
+                event_type=event_type,
+                customer_email=customer_email,
+                stripe_customer_id=str(stripe_customer_id or ""),
+                action="suspend_key",
+                result="success" if suspended else "not_found",
+            )
+
+        elif event_type == "customer.subscription.deleted":
+            metadata_email = (obj.get("metadata", {}).get("customer_email", "") or "").strip().lower()
+            deactivated = False
+            if stripe_customer_id:
+                deactivated = deactivate_key_by_stripe_customer_id(stripe_customer_id)
+            if not deactivated and metadata_email:
+                deactivated = deactivate_keys_for_owner(metadata_email) > 0
+            print(f"[STRIPE] subscription_deleted -> deactivated access for {metadata_email or stripe_customer_id}")
+            log_stripe_audit(
+                event_id=event_id,
+                event_type=event_type,
+                customer_email=metadata_email,
+                stripe_customer_id=str(stripe_customer_id or ""),
+                action="deactivate_key",
+                result="success" if deactivated else "not_found",
+            )
+
+        elif event_type == "customer.subscription.updated":
+            stripe_customer_id = obj.get("customer")
+            stripe_subscription_id = obj.get("id")
+            items = obj.get("items", {}).get("data", [])
+            price_id = ""
+            if items:
+                price_id = (items[0].get("price") or {}).get("id", "")
+            if price_id:
+                tier = map_price_to_tier(price_id)
+                if tier != "free":
+                    existing_key = find_key_by_stripe_customer_id(stripe_customer_id)
+                    if existing_key:
+                        activate_or_renew_key(
+                            existing_key,
+                            tier,
+                            stripe_customer_id=stripe_customer_id,
+                            stripe_subscription_id=stripe_subscription_id,
+                            stripe_price_id=price_id,
+                        )
+                        print(f"[STRIPE] subscription_updated -> {existing_key} ({tier})")
+                        log_stripe_audit(
+                            event_id=event_id,
+                            event_type=event_type,
+                            customer_email=customer_email,
+                            stripe_customer_id=str(stripe_customer_id or ""),
+                            action="update_tier",
+                            result="success",
+                            api_key=existing_key,
+                            tier=tier,
+                        )
+                    else:
+                        log_stripe_audit(
+                            event_id=event_id,
+                            event_type=event_type,
+                            customer_email=customer_email,
+                            stripe_customer_id=str(stripe_customer_id or ""),
+                            action="update_tier",
+                            result="not_found",
+                            tier=tier,
+                            reason="no_existing_key_for_customer",
+                        )
+                else:
+                    log_stripe_audit(
+                        event_id=event_id,
+                        event_type=event_type,
+                        customer_email=customer_email,
+                        stripe_customer_id=str(stripe_customer_id or ""),
+                        action="ignore_event",
+                        result="unmapped_price_id",
+                        reason=f"unmapped_price_id:{price_id}",
+                    )
+            else:
+                log_stripe_audit(
+                    event_id=event_id,
+                    event_type=event_type,
+                    customer_email=customer_email,
+                    stripe_customer_id=str(stripe_customer_id or ""),
+                    action="ignore_event",
+                    result="missing_price_id",
+                    reason="subscription_updated_missing_price",
+                )
+    else:
+        log_stripe_audit(
+            event_id=event_id,
+            event_type=str(event_type or ""),
+            action="ignore_event",
+            result="success",
+            reason="event_not_handled",
+        )
 
     return JSONResponse({
-        "status": "success",
+        "status": status,
         "event_type": event_type,
         "api_key_created": bool(created_key),
         "tier": created_tier,
+        "reason": reason,
     })
 
 

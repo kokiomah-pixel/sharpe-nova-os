@@ -202,6 +202,7 @@ cython_debug/
 # Local runtime state
 .usage.json
 keys.json
+.stripe_events.json
 .cursorignore
 .cursorindexingignore
 
