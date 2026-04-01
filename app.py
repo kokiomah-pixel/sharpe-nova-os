@@ -13,6 +13,13 @@ import fakeredis
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+from core.reflex_memory import (
+    ReflexMemoryState,
+    build_registry,
+    select_active_entry,
+    validate_reflex_memory_state,
+)
+from core.reflex_memory.proof import build_reflex_proof
 from key_manager import (
     activate_or_renew_key,
     deactivate_key_by_stripe_customer_id,
@@ -557,19 +564,29 @@ def derive_decision_status(intent: Optional[str], size: Optional[float], guardra
     return "ALLOW"
 
 
-def build_adjustment(decision_status: str, size: Optional[float], guardrail: Dict[str, Any]) -> str:
+def build_adjustment(
+    decision_status: str,
+    size: Optional[float],
+    guardrail: Dict[str, Any],
+    adjustment_factor: Optional[float] = None,
+) -> str:
     requested_size = float(size) if size is not None else None
     if decision_status == "VETO":
         return guardrail.get("advisory") or "Do not initiate new risk."
     if decision_status == "CONSTRAIN":
         if requested_size is not None and requested_size > 0:
-            adjusted_size = max(round(requested_size * 0.5, 2), 1.0)
+            factor = adjustment_factor if adjustment_factor is not None else 0.5
+            adjusted_size = max(round(requested_size * factor, 2), 1.0)
             return f"Reduce requested size from {requested_size:g} to {adjusted_size:g} and tighten execution controls."
         return "Reduce requested exposure and tighten execution controls."
     return guardrail.get("advisory") or "Proceed under normal risk controls."
 
 
-def build_impact_on_outcomes(decision_status: str, size: Optional[float]) -> Dict[str, Any]:
+def build_impact_on_outcomes(
+    decision_status: str,
+    size: Optional[float],
+    adjustment_factor: Optional[float] = None,
+) -> Dict[str, Any]:
     requested_size = float(size) if size is not None else None
     adjusted_size: Optional[float]
     explanation: str
@@ -579,7 +596,8 @@ def build_impact_on_outcomes(decision_status: str, size: Optional[float]) -> Dic
     elif decision_status == "VETO":
         adjusted_size = 0.0
     elif decision_status == "CONSTRAIN":
-        adjusted_size = max(round(requested_size * 0.5, 2), 1.0)
+        factor = adjustment_factor if adjustment_factor is not None else 0.5
+        adjusted_size = max(round(requested_size * factor, 2), 1.0)
     else:
         adjusted_size = requested_size
 
@@ -645,6 +663,69 @@ def build_memory_context() -> dict:
         "sequence_type": "stable_regime_pattern",
         "consequence_pattern": "historically associated with normal capital deployment conditions"
     }
+
+
+def build_historical_reference_from_reflex(state: ReflexMemoryState) -> dict:
+    if state.active_registry_id == "stress_new_risk_block":
+        return {
+            "sequence_type": "stress_escalation_cycle",
+            "consequence_pattern": "historically associated with rapid de-risking and elevated fragility persistence",
+        }
+
+    if state.active_registry_id == "elevated_fragility_size_brake":
+        return {
+            "sequence_type": "liquidity_deterioration_cycle",
+            "consequence_pattern": "historically escalates to Stress within 3-6 epochs under worsening conditions",
+        }
+
+    return {
+        "sequence_type": "stable_regime_pattern",
+        "consequence_pattern": "historically associated with normal capital deployment conditions",
+    }
+
+
+def apply_reflex_memory(
+    *,
+    regime: str,
+    intent: Optional[str],
+    asset: Optional[str],
+    size: Optional[float],
+    decision_status: str,
+) -> tuple[ReflexMemoryState, str, Optional[float]]:
+    registry = build_registry(regime)
+    active_entry = select_active_entry(registry=registry, intent=intent, size=size)
+    effective_decision = decision_status
+    adjustment_factor: Optional[float] = None
+
+    if active_entry and active_entry.decision_effect == "VETO":
+        effective_decision = "VETO"
+        adjustment_factor = active_entry.adjustment_factor
+    elif active_entry and active_entry.decision_effect == "CONSTRAIN" and decision_status != "VETO":
+        effective_decision = "CONSTRAIN"
+        adjustment_factor = active_entry.adjustment_factor
+
+    state = ReflexMemoryState(
+        persistence_state=active_entry.persistence_state if active_entry else "retained",
+        validation_status=active_entry.validation_status if active_entry else "observed",
+        registered_entries=registry,
+        active_registry_id=active_entry.registry_id if active_entry else None,
+        triggered=active_entry is not None,
+        influence_applied=active_entry is not None,
+        decision_before_reflex=decision_status,
+        decision_after_reflex=effective_decision,
+        metadata={
+            "regime": regime,
+            "intent": intent,
+            "asset": asset,
+            "requested_size": size,
+        },
+        proof=build_reflex_proof(
+            entry=active_entry,
+            decision_before_reflex=decision_status,
+            decision_after_reflex=effective_decision,
+        ),
+    )
+    return validate_reflex_memory_state(state), effective_decision, adjustment_factor
 
 
 def map_price_to_tier(price_id: str) -> str:
@@ -1023,10 +1104,26 @@ def get_context(
     epoch = get_current_epoch()
     timestamp = get_current_timestamp()
     guardrail = build_guardrail(intent=intent, asset=asset, size=size)
-    decision_status = derive_decision_status(intent=intent, size=size, guardrail=guardrail)
-    adjustment = build_adjustment(decision_status=decision_status, size=size, guardrail=guardrail)
-    impact_on_outcomes = build_impact_on_outcomes(decision_status=decision_status, size=size)
-    historical_reference = build_memory_context()
+    baseline_decision_status = derive_decision_status(intent=intent, size=size, guardrail=guardrail)
+    reflex_memory_state, decision_status, adjustment_factor = apply_reflex_memory(
+        regime=DEFAULT_REGIME,
+        intent=intent,
+        asset=asset,
+        size=size,
+        decision_status=baseline_decision_status,
+    )
+    adjustment = build_adjustment(
+        decision_status=decision_status,
+        size=size,
+        guardrail=guardrail,
+        adjustment_factor=adjustment_factor,
+    )
+    impact_on_outcomes = build_impact_on_outcomes(
+        decision_status=decision_status,
+        size=size,
+        adjustment_factor=adjustment_factor,
+    )
+    historical_reference = build_historical_reference_from_reflex(reflex_memory_state)
     decision_context = {
         "intent": intent,
         "asset": asset,
@@ -1036,6 +1133,7 @@ def get_context(
         "timestamp_utc": timestamp,
         "constitution_version": CONSTITUTION_VERSION,
         "tier": entitlement["tier"],
+        "reflex_influence_applied": reflex_memory_state.influence_applied,
     }
     constraint_analysis = build_constraint_analysis(
         intent=intent,
@@ -1051,6 +1149,7 @@ def get_context(
         "regime": DEFAULT_REGIME,
         "guardrail": guardrail,
         "memory_context": historical_reference,
+        "reflex_memory": reflex_memory_state.model_dump(),
         "transition_state": "stable_to_elevated_recent" if DEFAULT_REGIME == "Elevated Fragility" else "stable",
         "constitution_version": CONSTITUTION_VERSION,
         "tier": entitlement["tier"],

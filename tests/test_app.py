@@ -1,6 +1,8 @@
+import importlib
 import json
 import os
 import pytest
+import sys
 from fastapi.testclient import TestClient
 from unittest.mock import patch
 
@@ -93,13 +95,12 @@ def client():
     """Create a test client with mocked NOVA_KEYS_JSON."""
     keys_json = json.dumps(TEST_KEYS)
     with patch.dict(os.environ, {"NOVA_KEYS_JSON": keys_json, "NOVA_USAGE_FILE": ".usage.test.json"}):
-        # Re-import app to pick up mocked environment
-        from app import app
-        # Clear any previous usage state
-        from app import USAGE_TRACKING
+        sys.modules.pop("app", None)
+        app_module = importlib.import_module("app")
+        app = app_module.app
+        USAGE_TRACKING = app_module.USAGE_TRACKING
         USAGE_TRACKING.clear()
         yield TestClient(app)
-        # Cleanup
         USAGE_TRACKING.clear()
         try:
             os.remove(".usage.test.json")
@@ -139,6 +140,8 @@ def test_context_includes_guardrail_action_policy(client):
     assert "why_this_happened" in payload["impact_on_outcomes"]
     assert payload["adjustment"]
     assert payload["decision_status"] in {"ALLOW", "CONSTRAIN", "VETO"}
+    assert "reflex_memory" in payload
+    assert payload["decision_context"]["reflex_influence_applied"] is True
 
 
 # Test B: Billable endpoints increment usage
@@ -295,5 +298,98 @@ def test_context_changes_with_large_size(client):
 
     assert baseline_payload["decision_status"] == "CONSTRAIN"
     assert oversized_payload["decision_status"] == "VETO"
-    assert baseline_payload["impact_on_outcomes"]["adjusted_size"] == 5000.0
+    assert baseline_payload["impact_on_outcomes"]["adjusted_size"] == 4000.0
     assert oversized_payload["impact_on_outcomes"]["adjusted_size"] == 0.0
+
+
+def test_reflex_memory_state_present_in_canonical_path(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    reflex_memory = payload["reflex_memory"]
+
+    assert reflex_memory["schema_version"] == "1.0"
+    assert reflex_memory["mode"] == "retained_discipline"
+    assert reflex_memory["persistence_state"] == "retained"
+    assert reflex_memory["validation_status"] == "validated"
+    assert reflex_memory["active_registry_id"] == "elevated_fragility_size_brake"
+    assert reflex_memory["triggered"] is True
+    assert reflex_memory["influence_applied"] is True
+    assert reflex_memory["decision_before_reflex"] == "CONSTRAIN"
+    assert reflex_memory["decision_after_reflex"] == "CONSTRAIN"
+    assert isinstance(reflex_memory["registered_entries"], list)
+
+
+def test_reflex_influence_changes_decision_output(client, monkeypatch):
+    app_module = importlib.import_module("app")
+    headers = {"Authorization": "Bearer admin-key"}
+
+    monkeypatch.setattr(app_module, "DEFAULT_REGIME", "Elevated Fragility")
+    constrained = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+
+    monkeypatch.setattr(app_module, "DEFAULT_REGIME", "Stable")
+    baseline = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+
+    constrained_payload = constrained.json()
+    baseline_payload = baseline.json()
+
+    assert constrained.status_code == 200
+    assert baseline.status_code == 200
+    assert constrained_payload["impact_on_outcomes"]["adjusted_size"] == 4000.0
+    assert baseline_payload["impact_on_outcomes"]["adjusted_size"] == 10000.0
+    assert constrained_payload["adjustment"] != baseline_payload["adjustment"]
+    assert constrained_payload["reflex_memory"]["influence_applied"] is True
+    assert baseline_payload["reflex_memory"]["influence_applied"] is False
+
+
+def test_reflex_proof_emits_coherently(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+
+    assert response.status_code == 200
+    proof = response.json()["reflex_memory"]["proof"]
+
+    assert proof["schema_version"] == "1.0"
+    assert proof["intervention_class"] == "allocation_tightening"
+    assert proof["failure_class"] == "liquidity_deterioration"
+    assert proof["decision_before_reflex"] == "CONSTRAIN"
+    assert proof["decision_after_reflex"] == "CONSTRAIN"
+    assert proof["decision_altered"] is False
+    assert proof["triggered_registry_id"] == "elevated_fragility_size_brake"
+    assert proof["why_intervention_happened"]
+
+
+def test_reflex_schema_backward_compatibility_holds(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+
+    assert "memory_context" in payload
+    assert "historical_reference" in payload
+    assert payload["memory_context"]["sequence_type"] == payload["historical_reference"]["sequence_type"]
+    assert "consequence_pattern" in payload["memory_context"]
+    assert payload["reflex_memory"]["schema_version"] == "1.0"

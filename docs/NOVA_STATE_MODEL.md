@@ -6,8 +6,10 @@ Nova exposes a system state composed of:
 - timestamp (request time)
 - regime (system condition)
 - action_policy (execution constraints)
+- reflex_memory (retained discipline state)
 
 The Nova State Model defines how decision context is structured, not how trades are executed.
+Reflex Memory is operational retained discipline: governed memory that conditions decisions before execution, not a latent-learning system.
 
 ---
 
@@ -52,6 +54,36 @@ Defines what execution is allowed:
 - allow_position_increase
 - allow_risk_reduction
 - allow_position_decrease
+
+---
+
+## Reflex Memory
+
+Reflex Memory formalizes retained discipline in machine-readable form.
+
+Canonical schema objects:
+
+- `reflex_memory_state`
+- `reflex_proof`
+- `reflex_registry_entry`
+
+Launch-safe registry fields:
+
+- origin
+- failure_class
+- activation_condition
+- behavioral_effect
+- persistence_state
+- validation_status
+
+Proof surfaces expose:
+
+- what intervention class occurred
+- what failure class was addressed
+- what decision was altered
+- why the intervention happened
+
+This boundary is intentionally thin. It makes retained memory governable without expanding into full decay, rehabilitation, or conflict arbitration scaffolding before exposure.
 
 ---
 

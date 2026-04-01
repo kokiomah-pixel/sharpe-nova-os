@@ -2,6 +2,7 @@
 
 Sharpe Nova OS is a pre-execution decision discipline layer for autonomous capital systems.
 It conditions decisions before capital moves, ensuring they are coherent, constrained, and explainable under consistent rules.
+Nova conditions decisions through telemetry, constraint logic, and retained memory before execution.
 
 ## What Nova Is
 
@@ -53,6 +54,7 @@ Nova operates at this layer.
 - Decision Context
 - Constraint Analysis
 - Historical Reference
+- Reflex Memory
 - Impact on Outcomes
 - Adjustment
 - Decision Status
@@ -63,12 +65,15 @@ In the JSON payload, these sections are exposed as:
 - `decision_context`
 - `constraint_analysis`
 - `historical_reference`
+- `reflex_memory`
 - `impact_on_outcomes`
 - `adjustment`
 - `decision_status`
 
 All outputs follow a fixed structure, are neutral in tone, and are designed for institutional decision workflows.
 They are readable in real time and defensible in governance settings.
+
+`reflex_memory` is operational retained discipline, not latent learning. It exposes machine-readable state, a small validated registry surface, and allocator-safe proof of when retained memory tightened or blocked a decision.
 
 ### API Contract (Simplified)
 
