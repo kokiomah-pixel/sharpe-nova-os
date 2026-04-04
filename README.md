@@ -1,127 +1,140 @@
 # Sharpe Nova OS
 
-Sharpe Nova OS is a pre-execution decision discipline layer for autonomous capital systems.
-It conditions decisions before capital moves, ensuring they are coherent, constrained, and explainable under consistent rules.
-Nova conditions decisions through telemetry, constraint logic, and retained memory before execution.
+Sharpe Nova OS is a pre-execution decision discipline layer that conditions capital through telemetry, reflex memory, and constraint logic before execution.
 
-## What Nova Is
+It does not generate trades.  
+It does not predict markets.  
+It does not optimize portfolios.
 
-Nova is a callable API that evaluates decision context before execution.
-It returns structured, neutral outputs that can be used in trading systems, agent workflows, and governance processes.
+It determines whether a decision should proceed before capital moves.
 
-## What Nova Is Not
+## The Missing Layer
 
-- Not a trading system
-- Not a signal engine
-- Not a portfolio optimizer
-- Not a hedge fund
-- Not an execution layer
+Most systems are designed to act.
 
-Nova does not generate trades or execution signals.
-Nova conditions the decision context in which trades are made.
+Very few are designed to validate whether an action should occur.
 
-## The Shift
+As capital systems become automated:
 
-Capital is becoming autonomous.
-Execution is no longer the constraint.
+- decision frequency increases
+- execution speed increases
+- error propagation accelerates
 
-Decision coherence is.
+The current stack assumes decisions are correct.
 
-Nova operates at this layer.
+There is no system that conditions decisions before execution.
 
-## Reference
+## System Placement
 
-- Example output: see Output Structure below
-- Integration: `examples/nova_client.py`
-- Behavior demo: `examples/nova_comparison_agent.py`
-- Tests: `tests/test_app.py`
-- State model: `docs/NOVA_STATE_MODEL.md`
+Decision → Nova → Execution
 
-## System Position
+Nova sits between decision formation and execution.
 
-```text
-[ Strategy / Agent Layer ]
-            ↓
-[ Nova OS — Pre-Execution Decision Constraint Layer ]
-            ↓
-[ Execution Layer ]
-```
+It evaluates whether a decision should proceed under current conditions before capital is exposed.
 
-## Output Structure
+## API Output Structure
 
-### Example Output
+Each call to Nova returns:
 
-- Decision Context
-- Constraint Analysis
-- Historical Reference
-- Reflex Memory
-- Impact on Outcomes
-- Adjustment
-- Decision Status
-
-This structure is invariant across all Nova decision responses.
-
-In the JSON payload, these sections are exposed as:
 - `decision_context`
 - `constraint_analysis`
 - `historical_reference`
-- `reflex_memory`
 - `impact_on_outcomes`
 - `adjustment`
 - `decision_status`
 
-All outputs follow a fixed structure, are neutral in tone, and are designed for institutional decision workflows.
-They are readable in real time and defensible in governance settings.
+This output represents a validated decision state before execution.
 
-`reflex_memory` is operational retained discipline, not latent learning. It exposes machine-readable state, a small validated registry surface, and allocator-safe proof of when retained memory tightened or blocked a decision.
+Nova also returns `reflex_memory`, which exposes the retained discipline state applied to the decision.
 
-### API Contract (Simplified)
+## Example
 
-- Input: decision context
-- Output: structured decision response
+Input:
 
-The response format is fixed and invariant.
+```text
+intent=trade
+asset=ETH
+size=10000
+```
 
-## Verifiability
+Output (simplified):
 
-Nova outputs are designed to be verifiable.
+- `decision_status`: `CONSTRAIN`
+- `adjustment`: reduce size from `10000` to `4000`
+- `constraint_analysis`: elevated fragility detected
+- `impact_on_outcomes`: reduces exposure under unstable conditions
 
-Decisions can be anchored to cryptographic attestations that ensure:
-- consistent inputs
-- applied constraints
-- no post-generation modification
+Without Nova:
 
-This repository focuses on the decision layer.
+- full allocation executes
 
-Attestation infrastructure is introduced separately and is not implemented here.
+With Nova:
 
-Verifiability is designed to ensure decision integrity without exposing strategy details.
+- exposure is constrained before execution
 
-## Quick Integration
+## What Nova Changes
 
-1. Form a decision (allocation, trade, adjustment)
-2. Send it to Nova API
-3. Receive structured decision output
-4. Apply constraints before execution
+Nova does not improve outcomes after the fact.
 
-This establishes Nova as a pre-execution checkpoint in any decision workflow.
+It prevents fragile decisions from reaching execution.
 
-## Captured Example
+This results in:
 
-This is a captured example for demonstration purposes, not a live output.
+- reduced exposure under unstable conditions
+- fewer repeated failure states
+- more disciplined capital behavior over time
 
-**WITHOUT NOVA**
-- Executed size: 80,500
+## Reflex Memory
 
-**WITH NOVA (Configured Decision Regime: Elevated Fragility)**
-- Decision: CONSTRAIN
-- Executed size: 32,200
-- Reason: retained discipline tightened exposure before execution
+Reflex Memory is the retained discipline layer inside Nova.
 
----
+It encodes:
 
-- **Without Nova:** decisions are evaluated in isolation
-- **With Nova:** decisions are evaluated under consistent constraints
+- prior failure states
+- detection signals
+- constraint logic
+- future enforcement behavior
+
+This ensures that known failure patterns do not repeat under similar conditions.
+
+## Without Nova vs With Nova
+
+Without Nova:
+
+- decisions execute as proposed
+- exposure remains unchanged
+- failure conditions propagate
+
+With Nova:
+
+- decisions are validated before execution
+- exposure is adjusted under constraint
+- failure propagation is reduced
+
+## What Nova Is Not
+
+Nova is not:
+
+- a trading system
+- a signal engine
+- a prediction model
+- a portfolio optimizer
+
+Nova is a decision discipline layer applied before execution.
+
+## Final
+
+Sharpe Nova OS is not where capital moves.
+
+It is where decisions are validated before capital moves.
+
+## Reference
+
+- Example output: see API Output Structure above
+- Integration: `examples/nova_client.py`
+- Behavior demo: `examples/nova_comparison_agent.py`
+- Tests: `tests/test_app.py`
+- State model: `docs/NOVA_STATE_MODEL.md`
 
 ## Run This First
 
@@ -165,6 +178,7 @@ docker run --rm -p 8000:8000 -e NOVA_API_KEY=mytestkey nova-api
 Nova API access is controlled via API keys.
 
 Usage is governed through Policy B:
+
 - request metering
 - quota enforcement
 - usage tracking
@@ -195,6 +209,7 @@ Access and usage are designed to integrate into external systems rather than def
 ## Live vs Fixed Mode
 
 Live mode is default:
+
 - `timestamp_utc` updates on every request
 - `epoch` updates automatically (hourly bucket)
 
