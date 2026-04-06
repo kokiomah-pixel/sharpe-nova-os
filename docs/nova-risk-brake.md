@@ -1,6 +1,6 @@
-# Your Trading Agent Has No Risk Brake. Nova OS Adds One.
+# Your Decision Stack Has No Risk Brake. Nova OS Adds One.
 
-If your system can move capital without checking whether it is *allowed* under the current decision constraint context, it is executing unconditionally.
+If your system can expose capital without checking whether it is *allowed* under the current decision constraint context, it is operating without constraint enforcement.
 
 Run this:
 
@@ -15,8 +15,8 @@ Here is what you will see:
 Scenario: trade | ETH | 10000
 
 WITHOUT NOVA
-Decision: EXECUTE
-Result: trade executes at full size (10000)
+Decision State: UNCONSTRAINED
+Result: full exposure remains at proposed size (10000)
 
 WITH NOVA
 Configured Decision Regime: Elevated Fragility
@@ -27,20 +27,20 @@ Action Policy: {
   "allow_risk_reduction": true
 }
 Decision: CONSTRAIN
-Result: trade executes at retained-discipline size (4000 vs 10000)
+Result: validated decision state constrains exposure to retained-discipline size (4000 vs 10000)
 ============================================================
 
 SUMMARY
 
 Without Nova:
-- 4/4 scenarios executed at full size
-- Total executed size: 80500
+- 4/4 scenarios remained unconstrained at full size
+- Total validated exposure before execution: 80500
 
 With Nova:
 - 4 CONSTRAIN
-- Total executed size: 32200
+- Total validated exposure before execution: 32200
 
-Nova changed execution behavior in 4/4 scenarios.
+Nova changed validated decision state in 4/4 scenarios.
 ```
 
 ---
@@ -53,22 +53,22 @@ With Nova, it deployed **32,200** — because the configured decision regime (`E
 
 That is not a strategy difference. That is a **control gap**.
 
-Your system did not know the configured decision regime. It had no policy to read. It executed at full size because nothing told it not to.
+Your system did not know the configured decision regime. It had no policy to read. The proposed exposure remained at full size because nothing told it not to.
 
 ---
 
-## The Missing Step in Every Autonomous Execution Loop
+## The Missing Step in Every Autonomous Decision Loop
 
 Every autonomous capital system has some version of this loop:
 
 ```
-intent → size → execute
+intent → size → decision validation before execution
 ```
 
 The missing step is:
 
 ```
-intent → size → [CHECK: is this allowed right now?] → execute or halt
+intent → size → [CHECK: is this allowed right now?] → constrain, allow, or halt
 ```
 
 Nova is that check. It is a single API call that returns:
@@ -78,7 +78,7 @@ Nova is that check. It is a single API call that returns:
 - whether position increases are allowed
 - whether risk reduction is required
 
-Your system reads it. Your system decides. Capital moves conditionally.
+Your system reads it. Your system applies constraint enforcement. Capital is then exposed only under a validated decision state.
 
 ---
 
@@ -99,12 +99,12 @@ def nova_gate(intent, asset, size, api_key):
 
     if res["decision_status"] == "CONSTRAIN":
         adjusted = res["impact_on_outcomes"]["adjusted_size"]
-        raise RuntimeError(f"Nova CONSTRAIN: reduce size to {adjusted} before execution")
+        raise RuntimeError(f"Nova CONSTRAIN: reduce size to {adjusted} before capital deployment")
 
     return True
 ```
 
-Drop this before any capital action. If Nova says no, your system stops.
+Drop this before any capital action. If Nova says no, your system does not proceed to capital deployment.
 
 ---
 
@@ -124,13 +124,13 @@ Drop this before any capital action. If Nova says no, your system stops.
 }
 ```
 
-This is a machine-readable snapshot example. Your system can poll `/v1/context` before every execution for current decision constraint context.
+This is a machine-readable snapshot example. Your system can poll `/v1/context` before every capital deployment for current decision constraint context.
 
 ---
 
 ## What Happens Without This
 
-Agents already execute capital decisions in loops.
+Agents already validate and route capital decisions in loops.
 
 Without a pre-execution control point:
 
@@ -154,7 +154,7 @@ Before integrating anything, answer this:
 
 If the answer to any of these is “no”:
 
-Your system is executing with no control layer.
+Your system is operating with no control layer.
 
 ---
 
@@ -162,6 +162,6 @@ Your system is executing with no control layer.
 
 Run the comparison script. See your own output.
 
-If the numbers change — if Nova would have modified what your system would have done — you have a live gap in your execution stack.
+If the numbers change — if Nova would have modified what your system would have done — you have a live gap in your decision validation stack.
 
 Close it: [nova-api-ipz6.onrender.com](https://nova-api-ipz6.onrender.com)

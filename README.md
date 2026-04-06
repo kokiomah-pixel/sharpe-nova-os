@@ -8,6 +8,12 @@ It does not optimize portfolios.
 
 It determines whether a decision should proceed before capital moves.
 
+## Safe to Test
+
+This repository is safe for local testing.
+
+All examples run against a locally scoped environment and do not interact with live capital or production systems. Nova validates decisions before execution, and this repo is designed to make that behavior observable without exposing any sensitive infrastructure.
+
 ## The Missing Layer
 
 Most systems are designed to act.
@@ -66,7 +72,7 @@ Output (simplified):
 
 Without Nova:
 
-- full allocation executes
+- full allocation remains unchanged before execution
 
 With Nova:
 
@@ -101,7 +107,7 @@ This ensures that known failure patterns do not repeat under similar conditions.
 
 Without Nova:
 
-- decisions execute as proposed
+- decisions remain unchanged before execution
 - exposure remains unchanged
 - failure conditions propagate
 
@@ -115,10 +121,10 @@ With Nova:
 
 Nova is not:
 
-- a trading system
+- a market action system
 - a signal engine
 - a prediction model
-- a portfolio optimizer
+- an allocation optimizer
 
 Nova is a decision discipline layer applied before execution.
 
@@ -137,6 +143,8 @@ It is where decisions are validated before capital moves.
 - State model: `docs/NOVA_STATE_MODEL.md`
 
 ## Run This First
+
+Note: This endpoint returns a validated decision state. It does not initiate market actions or deploy capital.
 
 ```bash
 curl -H "Authorization: Bearer YOUR_API_KEY" \
@@ -163,6 +171,20 @@ For local example scripts:
 export NOVA_API_URL=http://127.0.0.1:8000
 export NOVA_API_KEY=mytestkey
 ```
+
+## Testing Nova Locally
+
+You can run and test Nova entirely in a local environment.
+
+- Runs on `localhost`
+- Uses test API keys
+- Does not connect to live capital or external execution systems
+
+Example:
+
+`http://127.0.0.1:8000/v1/context?intent=trade&asset=ETH&size=10000`
+
+This allows you to observe how Nova validates and constrains decisions before execution.
 
 ### Run via Docker
 

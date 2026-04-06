@@ -5,10 +5,10 @@ Nova exposes a system state composed of:
 - epoch (time bucket)
 - timestamp (request time)
 - regime (system condition)
-- action_policy (execution constraints)
+- action_policy (decision constraints before execution)
 - reflex_memory (retained discipline state)
 
-The Nova State Model defines how decision context is structured, not how trades are executed.
+The Nova State Model defines how decision context is structured, not how capital is validated for exposure.
 Reflex Memory is operational retained discipline: governed memory that conditions decisions before execution, not a latent-learning system.
 
 ---
@@ -48,7 +48,7 @@ Represents current system conditions:
 
 ## Action Policy
 
-Defines what execution is allowed:
+Defines what decision state is allowed before execution:
 
 - allow_new_risk
 - allow_position_increase
@@ -115,4 +115,4 @@ Nova will evolve toward:
 
 This will move Nova from:
 
-time-aware → state-aware execution control
+time-aware → state-aware decision control
