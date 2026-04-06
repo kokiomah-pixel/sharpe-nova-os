@@ -81,6 +81,31 @@ This is the core behavior of Nova:
 
 decisions are validated before capital moves, not corrected after.
 
+## Run It Again (Change One Variable)
+
+Now run the same request again, but change the size:
+
+```bash
+curl -s -H "Authorization: Bearer mytestkey" \
+"http://127.0.0.1:8000/v1/context?intent=trade&asset=ETH&size=20000"
+```
+
+Compare this response to your first one.
+
+Look for:
+
+- whether the decision is still allowed or further constrained
+- how the adjustment changes
+- how the reasoning evolves
+
+Nova is not producing a static answer.
+
+It is conditioning decisions based on the structure of the request and current system context before execution.
+
+If you change the structure of the decision, Nova will change how it responds.
+
+This is how discipline becomes consistent across different scenarios.
+
 ### Try Your Own Decision
 
 Change the parameters and run the request again:
