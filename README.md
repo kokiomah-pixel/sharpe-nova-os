@@ -7,7 +7,7 @@ Before capital moves, the system determines whether the decision should exist.
 Start the local server:
 
 ```bash
-NOVA_API_KEY=mytestkey uvicorn app:app --host 127.0.0.1 --port 8000
+NOVA_API_KEY=mytestkey ./.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
 Try this:
@@ -246,15 +246,6 @@ It is where decisions are validated before capital moves.
 - Tests: `tests/test_app.py`
 - State model: `docs/NOVA_STATE_MODEL.md`
 
-## Run This First
-
-Note: This endpoint returns a validated decision state. It does not initiate market actions or deploy capital.
-
-```bash
-curl -H "Authorization: Bearer YOUR_API_KEY" \
-"https://YOUR_API_DOMAIN/v1/context?intent=trade&asset=ETH&size=10000"
-```
-
 ## Quick Start
 
 ```bash
@@ -275,20 +266,6 @@ For local example scripts:
 export NOVA_API_URL=http://127.0.0.1:8000
 export NOVA_API_KEY=mytestkey
 ```
-
-## Testing Nova Locally
-
-You can run and test Nova entirely in a local environment.
-
-- Runs on `localhost`
-- Uses test API keys
-- Does not connect to live capital or external execution systems
-
-Example:
-
-`http://127.0.0.1:8000/v1/context?intent=trade&asset=ETH&size=10000`
-
-This allows you to observe how Nova validates and constrains decisions before execution.
 
 ### Run via Docker
 
