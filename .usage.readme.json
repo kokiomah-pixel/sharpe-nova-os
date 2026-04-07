@@ -1,9 +1,9 @@
 {
   "mytestkey": {
     "by_endpoint": {
-      "/v1/context": 2
+      "/v1/context": 4
     },
-    "last_seen": "2026-04-06T03:55:43.869355+00:00",
-    "total_calls": 2
+    "last_seen": "2026-04-07T21:13:12.191625+00:00",
+    "total_calls": 4
   }
 }

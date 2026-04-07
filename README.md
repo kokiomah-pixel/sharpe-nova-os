@@ -1,22 +1,8 @@
 # Sharpe Nova OS
 
-Sharpe Nova OS is a pre-execution decision discipline layer that conditions capital through telemetry, reflex memory, and constraint logic before execution.
+## Run a Decision Through Nova
 
-It does not generate trades.  
-It does not predict markets.  
-It does not optimize portfolios.
-
-It determines whether a decision should proceed before capital moves.
-
-## Safe to Test
-
-This repository is safe for local testing.
-
-All examples run against a locally scoped environment and do not interact with live capital or production systems. Nova validates decisions before execution, and this repo is designed to make that behavior observable without exposing any sensitive infrastructure.
-
-## Run Nova in 30 Seconds
-
-The fastest way to understand Nova is to run a decision through it once and watch what changes.
+Before capital moves, the system determines whether the decision should exist.
 
 Start the local server:
 
@@ -24,18 +10,22 @@ Start the local server:
 NOVA_API_KEY=mytestkey uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-Then run:
+Try this:
 
 ```bash
 curl -s -H "Authorization: Bearer mytestkey" \
 "http://127.0.0.1:8000/v1/context?intent=trade&asset=ETH&size=10000"
 ```
 
-You will receive a validated decision response showing:
+You are not asking Nova what performs best.
 
-- whether the decision should proceed
-- how exposure is adjusted
-- why constraints are applied
+## Why this matters
+
+You are not giving instructions.
+
+You are:
+
+> **forcing a cognitive shift**
 
 Nova does not execute trades.
 
@@ -69,17 +59,19 @@ This is the moment Nova introduces discipline into a decision before capital mov
 
 ### What Just Happened
 
-Nova evaluated your decision before execution and determined that full exposure should not be allowed under current conditions.
+A decision attempted to enter the system.
 
-Instead of allowing the original request, it:
+Nova evaluated it before execution.
 
-- constrained the size of the decision
-- explained why the constraint was applied
-- showed how this reduces exposure to known failure patterns
+The system did one of three things:
 
-This is the core behavior of Nova:
+- Allowed it
+- Constrained it
+- Rejected it
 
-decisions are validated before capital moves, not corrected after.
+This is not optimization.
+
+This is decision admission.
 
 ## Run It Again (Change One Variable)
 
@@ -91,6 +83,10 @@ curl -s -H "Authorization: Bearer mytestkey" \
 ```
 
 Compare this response to your first one.
+
+You are asking:
+
+Is this decision allowed?
 
 Look for:
 
@@ -115,6 +111,12 @@ Change the parameters and run the request again:
 - intent
 
 Observe how Nova responds under different conditions.
+
+## Safe to Test
+
+This repository is safe for local testing.
+
+All examples run against a locally scoped environment and do not interact with live capital or production systems. Nova validates decisions before execution, and this repo is designed to make that behavior observable without exposing any sensitive infrastructure.
 
 ## The Missing Layer
 
