@@ -245,6 +245,7 @@ It is where decisions are validated before capital moves.
 - Behavior demo: `examples/nova_comparison_agent.py`
 - Tests: `tests/test_app.py`
 - State model: `docs/NOVA_STATE_MODEL.md`
+- GitHub access policy: `docs/GITHUB_ACCESS_POLICY.md`
 
 ## Quick Start
 
