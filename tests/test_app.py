@@ -102,15 +102,18 @@ def client():
         REJECTION_LEDGER = app_module.REJECTION_LEDGER
         EXCEPTION_REGISTER = app_module.EXCEPTION_REGISTER
         HALT_SIGNAL_STATE = app_module.HALT_SIGNAL_STATE
+        DECISION_ADMISSION_STATE = app_module.DECISION_ADMISSION_STATE
         USAGE_TRACKING.clear()
         REJECTION_LEDGER.clear()
         EXCEPTION_REGISTER.clear()
         HALT_SIGNAL_STATE.clear()
+        DECISION_ADMISSION_STATE.clear()
         yield TestClient(app)
         USAGE_TRACKING.clear()
         REJECTION_LEDGER.clear()
         EXCEPTION_REGISTER.clear()
         HALT_SIGNAL_STATE.clear()
+        DECISION_ADMISSION_STATE.clear()
         try:
             os.remove(".usage.test.json")
         except FileNotFoundError:
@@ -490,3 +493,87 @@ def test_compound_integrity_failures_raise_halt_recommendation(client):
     assert payload["halt_recommendation"]
     assert payload["integrity_state"] == "halt_recommended"
 
+
+def test_stablecoin_trace_enrichment_present(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "increase_position", "asset": "USDC", "size": 20000, "strategy": "peg_instability"},
+    )
+
+    assert response.status_code == 200
+    trace = response.json()["constraint_trace"]
+    assert trace["constraint_category"] == "stablecoin"
+    assert trace["reflex_memory_class"] == "stablecoin_defense"
+    assert trace["domain_signal"] == "peg_instability"
+    assert trace["prevented_risk_type"] == "depeg_exposure"
+
+
+def test_validator_trace_enrichment_present(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "increase_position", "asset": "stETH", "size": 20000, "strategy": "validator_uptime_drop"},
+    )
+
+    assert response.status_code == 200
+    trace = response.json()["constraint_trace"]
+    assert trace["constraint_category"] == "validator"
+    assert trace["reflex_memory_class"] == "validator_reflex"
+    assert trace["domain_signal"] == "uptime_degradation"
+    assert trace["telemetry_domain"] == "validator_telemetry"
+
+
+def test_governance_trace_enrichment_present(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "increase_position", "asset": "LDO", "size": 20000, "strategy": "delegate_concentration"},
+    )
+
+    assert response.status_code == 200
+    trace = response.json()["constraint_trace"]
+    assert trace["constraint_category"] == "governance"
+    assert trace["reflex_memory_class"] == "governance_reflex"
+    assert trace["domain_signal"] == "delegate_concentration"
+    assert trace["prevented_risk_type"] == "governance_capture"
+
+
+def test_macro_trace_enrichment_present(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 10000, "strategy": "macro rate shock"},
+    )
+
+    assert response.status_code == 200
+    trace = response.json()["constraint_trace"]
+    assert trace["constraint_category"] == "macro"
+    assert trace["reflex_memory_class"] == "macro_reflex"
+    assert trace["domain_signal"] == "rate_shock"
+    assert trace["regime_context_applied"] is True
+
+
+def test_cross_decision_pressure_is_visible(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 20000},
+    )
+
+    assert response.status_code == 200
+    trace = response.json()["constraint_trace"]
+    assert trace["cross_decision_pressure"] is True
+    assert trace["related_prior_decisions"]
+    assert trace["accumulated_constraint_category"] == "exposure_compounding"
+    assert trace["exposure_compounding_detected"] is True

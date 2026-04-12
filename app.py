@@ -96,6 +96,7 @@ STRIPE_AUDIT_FILE = Path(os.getenv("NOVA_STRIPE_AUDIT_FILE", "stripe_webhook_aud
 REJECTION_LEDGER: List[Dict[str, Any]] = []
 EXCEPTION_REGISTER: List[Dict[str, Any]] = []
 HALT_SIGNAL_STATE: Dict[str, List[Dict[str, Any]]] = {}
+DECISION_ADMISSION_STATE: Dict[str, List[Dict[str, Any]]] = {}
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -486,6 +487,9 @@ RISK_INCREASING_INTENTS = {
     "open_position",
     "increase_position",
 }
+STABLECOIN_ASSETS = {"USDC", "USDT", "DAI", "FRAX", "LUSD"}
+VALIDATOR_ASSETS = {"stETH", "rETH", "cbETH"}
+GOVERNANCE_ASSETS = {"LDO", "COMP", "MKR", "AAVE", "UNI"}
 
 
 def _normalize_text(value: Optional[str]) -> str:
@@ -590,6 +594,170 @@ def _halt_state_for_api_key(api_key: str, current_exception_count: int) -> Dict[
     }
 
 
+def _domain_trace_defaults() -> Dict[str, Any]:
+    return {
+        "constraint_category": None,
+        "reflex_memory_class": None,
+        "domain_signal": None,
+        "prevented_risk_type": None,
+        "telemetry_domain": None,
+        "regime_context_applied": False,
+        "related_prior_decisions": [],
+        "cross_decision_pressure": False,
+        "accumulated_constraint_category": None,
+        "exposure_compounding_detected": False,
+    }
+
+
+def _build_prior_decision_reference(entry: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "request_id": entry.get("request_id"),
+        "intent": entry.get("intent"),
+        "asset": entry.get("asset"),
+        "decision_status": entry.get("decision_status"),
+        "requested_size": entry.get("requested_size"),
+    }
+
+
+def _recent_prior_decisions(
+    *,
+    api_key: str,
+    intent: Optional[str],
+    asset: Optional[str],
+) -> List[Dict[str, Any]]:
+    normalized_intent = _normalize_text(intent)
+    if normalized_intent not in RISK_INCREASING_INTENTS:
+        return []
+
+    recent = DECISION_ADMISSION_STATE.get(api_key, [])
+    related = []
+    for entry in recent[-5:]:
+        if entry.get("intent") in RISK_INCREASING_INTENTS and entry.get("asset") in {asset, "ANY"}:
+            related.append(_build_prior_decision_reference(entry))
+    return related
+
+
+def _infer_domain_trace(
+    *,
+    api_key: str,
+    intent: Optional[str],
+    asset: Optional[str],
+    venue: Optional[str],
+    strategy: Optional[str],
+    decision_status: str,
+    guardrail: Dict[str, Any],
+) -> Dict[str, Any]:
+    trace = _domain_trace_defaults()
+    strategy_text = _normalize_text(strategy)
+    venue_text = _normalize_text(venue)
+    asset_text = (asset or "").upper()
+    advisory_text = _normalize_text(guardrail.get("advisory"))
+
+    if asset_text in STABLECOIN_ASSETS or "peg" in strategy_text or "stablecoin" in strategy_text:
+        trace.update({
+            "constraint_category": "stablecoin",
+            "reflex_memory_class": "stablecoin_defense",
+            "domain_signal": "peg_instability",
+            "prevented_risk_type": "depeg_exposure",
+            "telemetry_domain": "stablecoin_telemetry",
+        })
+    elif asset_text in VALIDATOR_ASSETS or any(term in strategy_text for term in ("validator", "slashing", "uptime", "withdrawal")):
+        domain_signal = "validator_pressure"
+        if "uptime" in strategy_text:
+            domain_signal = "uptime_degradation"
+        elif "slashing" in strategy_text:
+            domain_signal = "slashing_risk"
+        elif "withdrawal" in strategy_text:
+            domain_signal = "withdrawal_queue_abnormality"
+        trace.update({
+            "constraint_category": "validator",
+            "reflex_memory_class": "validator_reflex",
+            "domain_signal": domain_signal,
+            "prevented_risk_type": "validator_failure_exposure",
+            "telemetry_domain": "validator_telemetry",
+        })
+    elif asset_text in GOVERNANCE_ASSETS or any(term in strategy_text for term in ("governance", "delegate", "proposal", "treasury")):
+        domain_signal = "governance_pressure"
+        if "delegate" in strategy_text:
+            domain_signal = "delegate_concentration"
+        elif "proposal" in strategy_text:
+            domain_signal = "proposal_capture_risk"
+        elif "treasury" in strategy_text:
+            domain_signal = "treasury_compromise_signal"
+        trace.update({
+            "constraint_category": "governance",
+            "reflex_memory_class": "governance_reflex",
+            "domain_signal": domain_signal,
+            "prevented_risk_type": "governance_capture",
+            "telemetry_domain": "governance_telemetry",
+        })
+    elif any(term in strategy_text for term in ("macro", "rate", "inflation", "fx", "volatility")):
+        domain_signal = "macro_instability"
+        if "rate" in strategy_text:
+            domain_signal = "rate_shock"
+        elif "inflation" in strategy_text:
+            domain_signal = "inflation_surprise"
+        elif "fx" in strategy_text:
+            domain_signal = "fx_instability"
+        elif "volatility" in strategy_text:
+            domain_signal = "volatility_expansion"
+        trace.update({
+            "constraint_category": "macro",
+            "reflex_memory_class": "macro_reflex",
+            "domain_signal": domain_signal,
+            "prevented_risk_type": "macro_regime_exposure",
+            "telemetry_domain": "macro_telemetry",
+            "regime_context_applied": True,
+        })
+    elif any(term in advisory_text for term in ("liquidity", "fragility")) or "liquidity" in strategy_text or "slippage" in strategy_text or "thin_order_book" in venue_text:
+        trace.update({
+            "constraint_category": "liquidity",
+            "reflex_memory_class": "liquidity_reflex",
+            "domain_signal": "liquidity_deterioration",
+            "prevented_risk_type": "execution_slippage_exposure",
+            "telemetry_domain": "execution_telemetry",
+        })
+    else:
+        trace.update({
+            "constraint_category": "general",
+            "reflex_memory_class": "retained_discipline",
+            "domain_signal": "baseline_guardrail",
+            "prevented_risk_type": "unrestricted_risk_growth",
+            "telemetry_domain": "decision_telemetry",
+        })
+
+    related_prior_decisions = _recent_prior_decisions(api_key=api_key, intent=intent, asset=asset)
+    if related_prior_decisions and decision_status in {"CONSTRAIN", "VETO"}:
+        trace.update({
+            "related_prior_decisions": related_prior_decisions,
+            "cross_decision_pressure": True,
+            "accumulated_constraint_category": "exposure_compounding",
+            "exposure_compounding_detected": True,
+        })
+
+    return trace
+
+
+def _record_admission_state(
+    *,
+    api_key: str,
+    request_id: str,
+    intent: Optional[str],
+    asset: Optional[str],
+    requested_size: Optional[float],
+    decision_status: str,
+) -> None:
+    entry = {
+        "request_id": request_id,
+        "intent": _normalize_text(intent),
+        "asset": asset or "ANY",
+        "requested_size": requested_size,
+        "decision_status": decision_status,
+    }
+    DECISION_ADMISSION_STATE.setdefault(api_key, []).append(entry)
+    DECISION_ADMISSION_STATE[api_key] = DECISION_ADMISSION_STATE[api_key][-10:]
+
+
 def _build_structured_response(
     *,
     status_code: int,
@@ -606,6 +774,7 @@ def _build_structured_response(
     constraint_reason: str,
     impact_reason: str,
     adjusted_size: Optional[float],
+    constraint_trace: Optional[Dict[str, Any]] = None,
     exception_entries: Optional[List[Dict[str, Any]]] = None,
     rejection_entry: Optional[Dict[str, Any]] = None,
 ) -> JSONResponse:
@@ -620,6 +789,7 @@ def _build_structured_response(
         parsed_size = None
 
     exception_entries = exception_entries or []
+    constraint_trace = {**_domain_trace_defaults(), **(constraint_trace or {})}
     halt_state = _halt_state_for_api_key(api_key, len(exception_entries))
     payload = {
         "epoch": epoch,
@@ -654,6 +824,7 @@ def _build_structured_response(
             "constraint_category": constraint_category,
             "why_this_happened": constraint_reason,
         },
+        "constraint_trace": constraint_trace,
         "impact_on_outcomes": {
             "requested_size": parsed_size,
             "adjusted_size": adjusted_size,
@@ -698,6 +869,7 @@ def _reject_decision(
     reason: str,
     impact_reason: str,
     exception_descriptors: Optional[List[Dict[str, str]]] = None,
+    constraint_trace: Optional[Dict[str, Any]] = None,
 ) -> JSONResponse:
     timestamp = get_current_timestamp()
     snapshot = _request_snapshot(intent=intent, asset=asset, size_raw=size_raw, venue=venue, strategy=strategy)
@@ -732,6 +904,14 @@ def _reject_decision(
         constraint_reason=reason,
         impact_reason=impact_reason,
         adjusted_size=0.0,
+        constraint_trace=constraint_trace or {
+            **_domain_trace_defaults(),
+            "constraint_category": constraint_category,
+            "reflex_memory_class": "integrity_reflex" if constraint_category == "process_integrity_violation" else "admission_gate",
+            "domain_signal": constraint_category,
+            "prevented_risk_type": "process_integrity_failure" if constraint_category == "process_integrity_violation" else "invalid_decision_admission",
+            "telemetry_domain": "integrity_telemetry",
+        },
         exception_entries=exception_entries,
         rejection_entry=rejection_entry,
     )
@@ -1596,6 +1776,28 @@ def get_context(
         guardrail=guardrail,
         decision_status=decision_status,
     )
+    constraint_trace = _infer_domain_trace(
+        api_key=entitlement["api_key"],
+        intent=intent,
+        asset=asset,
+        venue=venue,
+        strategy=strategy,
+        decision_status=decision_status,
+        guardrail=guardrail,
+    )
+    constraint_analysis.update({
+        "constraint_category": constraint_trace["constraint_category"],
+        "reflex_memory_class": constraint_trace["reflex_memory_class"],
+        "domain_signal": constraint_trace["domain_signal"],
+        "prevented_risk_type": constraint_trace["prevented_risk_type"],
+        "telemetry_domain": constraint_trace["telemetry_domain"],
+        "regime_context_applied": constraint_trace["regime_context_applied"],
+        "related_prior_decisions": constraint_trace["related_prior_decisions"],
+        "cross_decision_pressure": constraint_trace["cross_decision_pressure"],
+        "accumulated_constraint_category": constraint_trace["accumulated_constraint_category"],
+        "exposure_compounding_detected": constraint_trace["exposure_compounding_detected"],
+    })
+
     decision_admission_record = {
         "request_id": _build_request_id(
             timestamp,
@@ -1627,6 +1829,7 @@ def get_context(
         "decision_admission_record": decision_admission_record,
         "decision_context": decision_context,
         "constraint_analysis": constraint_analysis,
+        "constraint_trace": constraint_trace,
         "historical_reference": historical_reference,
         "impact_on_outcomes": impact_on_outcomes,
         "adjustment": adjustment,
@@ -1648,6 +1851,15 @@ def get_context(
         payload["venue"] = venue
     if strategy:
         payload["strategy"] = strategy
+
+    _record_admission_state(
+        api_key=entitlement["api_key"],
+        request_id=decision_admission_record["request_id"],
+        intent=intent,
+        asset=asset,
+        requested_size=parsed_size,
+        decision_status=decision_status,
+    )
 
     payload["signature"] = sign_payload(payload)
     return JSONResponse(payload)

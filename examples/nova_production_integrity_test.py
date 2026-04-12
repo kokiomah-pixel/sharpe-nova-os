@@ -110,6 +110,7 @@ def payload_has_domain_signal(payload: Optional[Dict[str, Any]], terms: List[str
     if not payload:
         return False
     haystacks = [
+        json.dumps(payload.get("constraint_trace", {}), sort_keys=True).lower(),
         json.dumps(payload.get("constraint_analysis", {}), sort_keys=True).lower(),
         json.dumps(payload.get("historical_reference", {}), sort_keys=True).lower(),
         json.dumps(payload.get("memory_context", {}), sort_keys=True).lower(),
@@ -180,6 +181,7 @@ def make_request_record(result: Dict[str, Any]) -> Dict[str, Any]:
         "normalized_status": normalize_status(result.get("http_status"), result.get("payload")),
         "decision_status": payload.get("decision_status"),
         "adjustment": payload.get("adjustment"),
+        "constraint_trace": payload.get("constraint_trace"),
         "constraint_analysis": payload.get("constraint_analysis"),
         "impact_on_outcomes": payload.get("impact_on_outcomes"),
         "body_preview": result.get("body_preview"),
