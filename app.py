@@ -6,7 +6,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import redis
 import fakeredis
@@ -93,6 +93,9 @@ PROCESSED_EVENTS = set()
 PROCESSED_EVENTS_FILE = Path(os.getenv("STRIPE_PROCESSED_EVENTS_FILE", ".stripe_events.json")).expanduser()
 PROCESSED_EVENTS_LOCK = Lock()
 STRIPE_AUDIT_FILE = Path(os.getenv("NOVA_STRIPE_AUDIT_FILE", "stripe_webhook_audit.jsonl")).expanduser()
+REJECTION_LEDGER: List[Dict[str, Any]] = []
+EXCEPTION_REGISTER: List[Dict[str, Any]] = []
+HALT_SIGNAL_STATE: Dict[str, List[Dict[str, Any]]] = {}
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -452,6 +455,432 @@ def sign_payload(payload: dict) -> str:
         encoded,
         hashlib.sha256
     ).hexdigest()
+
+
+AMBIGUOUS_LANGUAGE_TERMS = {
+    "small size",
+    "looks safe",
+    "good setup",
+    "reasonable risk",
+}
+BYPASS_PHRASES = {
+    "skip validation",
+    "just execute",
+    "route directly",
+}
+RETROACTIVE_PHRASES = {
+    "retroactive",
+    "after execution",
+    "retroactive log",
+}
+OVERRIDE_PHRASES = {
+    "override",
+}
+DELAY_PHRASES = {
+    "delay",
+    "delayed logging",
+}
+RISK_INCREASING_INTENTS = {
+    "trade",
+    "deploy_liquidity",
+    "open_position",
+    "increase_position",
+}
+
+
+def _normalize_text(value: Optional[str]) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def _request_snapshot(
+    *,
+    intent: Optional[str],
+    asset: Optional[str],
+    size_raw: Optional[str],
+    venue: Optional[str],
+    strategy: Optional[str],
+) -> Dict[str, Any]:
+    return {
+        "intent": intent,
+        "asset": asset,
+        "size": size_raw,
+        "venue": venue,
+        "strategy": strategy,
+    }
+
+
+def _build_request_id(timestamp: str, snapshot: Dict[str, Any]) -> str:
+    raw = json.dumps({"timestamp": timestamp, "snapshot": snapshot}, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _record_exception(
+    *,
+    api_key: str,
+    timestamp: str,
+    category: str,
+    detail: str,
+    snapshot: Dict[str, Any],
+) -> Dict[str, Any]:
+    entry = {
+        "event_id": _build_request_id(timestamp, {"category": category, "snapshot": snapshot}),
+        "timestamp_utc": timestamp,
+        "category": category,
+        "detail": detail,
+        "request_snapshot": snapshot,
+    }
+    EXCEPTION_REGISTER.append(entry)
+    HALT_SIGNAL_STATE.setdefault(api_key, []).append(entry)
+    HALT_SIGNAL_STATE[api_key] = HALT_SIGNAL_STATE[api_key][-10:]
+    return entry
+
+
+def _record_rejection(
+    *,
+    timestamp: str,
+    constraint_category: str,
+    reason: str,
+    snapshot: Dict[str, Any],
+) -> Dict[str, Any]:
+    entry = {
+        "entry_id": _build_request_id(timestamp, {"constraint_category": constraint_category, "snapshot": snapshot}),
+        "timestamp_utc": timestamp,
+        "constraint_category": constraint_category,
+        "reason": reason,
+        "request_snapshot": snapshot,
+    }
+    REJECTION_LEDGER.append(entry)
+    return entry
+
+
+def _detect_exception_categories(*values: Optional[str]) -> List[Dict[str, str]]:
+    text = " ".join(_normalize_text(value) for value in values if value)
+    hits: List[Dict[str, str]] = []
+    if any(phrase in text for phrase in BYPASS_PHRASES):
+        hits.append({
+            "category": "bypass_attempt",
+            "detail": "Bypass phrasing detected in decision request.",
+        })
+    if any(phrase in text for phrase in RETROACTIVE_PHRASES):
+        hits.append({
+            "category": "retroactive_attempt",
+            "detail": "Retroactive logging language detected in decision request.",
+        })
+    if any(phrase in text for phrase in OVERRIDE_PHRASES):
+        hits.append({
+            "category": "override_attempt",
+            "detail": "Override language detected in decision request.",
+        })
+    if any(phrase in text for phrase in DELAY_PHRASES):
+        hits.append({
+            "category": "delayed_logging_attempt",
+            "detail": "Delayed logging language detected in decision request.",
+        })
+    return hits
+
+
+def _halt_state_for_api_key(api_key: str, current_exception_count: int) -> Dict[str, Any]:
+    recent_events = HALT_SIGNAL_STATE.get(api_key, [])
+    recent_categories = {event.get("category") for event in recent_events}
+    escalate = current_exception_count >= 2 or len(recent_events) >= 3 or len(recent_categories) >= 3
+    return {
+        "escalation_flag": escalate,
+        "halt_recommendation": "Halt and review process integrity before further decision admission." if escalate else None,
+        "integrity_state": "halt_recommended" if escalate else "operational",
+    }
+
+
+def _build_structured_response(
+    *,
+    status_code: int,
+    api_key: str,
+    tier: str,
+    intent: Optional[str],
+    asset: Optional[str],
+    size_raw: Optional[str],
+    venue: Optional[str],
+    strategy: Optional[str],
+    decision_status: str,
+    adjustment: str,
+    constraint_category: str,
+    constraint_reason: str,
+    impact_reason: str,
+    adjusted_size: Optional[float],
+    exception_entries: Optional[List[Dict[str, Any]]] = None,
+    rejection_entry: Optional[Dict[str, Any]] = None,
+) -> JSONResponse:
+    timestamp = get_current_timestamp()
+    epoch = get_current_epoch()
+    snapshot = _request_snapshot(intent=intent, asset=asset, size_raw=size_raw, venue=venue, strategy=strategy)
+    request_id = _build_request_id(timestamp, snapshot)
+    parsed_size: Optional[float]
+    try:
+        parsed_size = float(size_raw) if size_raw is not None else None
+    except (TypeError, ValueError):
+        parsed_size = None
+
+    exception_entries = exception_entries or []
+    halt_state = _halt_state_for_api_key(api_key, len(exception_entries))
+    payload = {
+        "epoch": epoch,
+        "timestamp_utc": timestamp,
+        "regime": DEFAULT_REGIME,
+        "constitution_version": CONSTITUTION_VERSION,
+        "tier": tier,
+        "decision_admission_record": {
+            "request_id": request_id,
+            "request_snapshot": snapshot,
+            "recorded_before_execution": True,
+        },
+        "decision_context": {
+            "intent": intent,
+            "asset": asset,
+            "requested_size": parsed_size,
+            "request_size_raw": size_raw,
+            "regime": DEFAULT_REGIME,
+            "epoch": epoch,
+            "timestamp_utc": timestamp,
+            "constitution_version": CONSTITUTION_VERSION,
+            "tier": tier,
+            "reflex_influence_applied": False,
+        },
+        "constraint_analysis": {
+            "intent": intent,
+            "asset": asset,
+            "requested_size": parsed_size,
+            "severity": "high" if decision_status == "VETO" else "medium",
+            "policy": {},
+            "advisory": adjustment,
+            "constraint_category": constraint_category,
+            "why_this_happened": constraint_reason,
+        },
+        "impact_on_outcomes": {
+            "requested_size": parsed_size,
+            "adjusted_size": adjusted_size,
+            "size_delta": None if parsed_size is None or adjusted_size is None else round(adjusted_size - parsed_size, 2),
+            "why_this_happened": impact_reason,
+        },
+        "adjustment": adjustment,
+        "decision_status": decision_status,
+        "exception_register": exception_entries,
+        "rejection_ledger": rejection_entry,
+        "escalation_flag": halt_state["escalation_flag"],
+        "halt_recommendation": halt_state["halt_recommendation"],
+        "integrity_state": halt_state["integrity_state"],
+    }
+
+    if asset:
+        payload["asset"] = asset
+    if intent:
+        payload["intent"] = intent
+    if parsed_size is not None:
+        payload["size"] = parsed_size
+    if venue:
+        payload["venue"] = venue
+    if strategy:
+        payload["strategy"] = strategy
+
+    payload["signature"] = sign_payload(payload)
+    return JSONResponse(payload, status_code=status_code)
+
+
+def _reject_decision(
+    *,
+    status_code: int,
+    api_key: str,
+    tier: str,
+    intent: Optional[str],
+    asset: Optional[str],
+    size_raw: Optional[str],
+    venue: Optional[str],
+    strategy: Optional[str],
+    constraint_category: str,
+    reason: str,
+    impact_reason: str,
+    exception_descriptors: Optional[List[Dict[str, str]]] = None,
+) -> JSONResponse:
+    timestamp = get_current_timestamp()
+    snapshot = _request_snapshot(intent=intent, asset=asset, size_raw=size_raw, venue=venue, strategy=strategy)
+    rejection_entry = _record_rejection(
+        timestamp=timestamp,
+        constraint_category=constraint_category,
+        reason=reason,
+        snapshot=snapshot,
+    )
+    exception_entries = [
+        _record_exception(
+            api_key=api_key,
+            timestamp=timestamp,
+            category=descriptor["category"],
+            detail=descriptor["detail"],
+            snapshot=snapshot,
+        )
+        for descriptor in (exception_descriptors or [])
+    ]
+    return _build_structured_response(
+        status_code=status_code,
+        api_key=api_key,
+        tier=tier,
+        intent=intent,
+        asset=asset,
+        size_raw=size_raw,
+        venue=venue,
+        strategy=strategy,
+        decision_status="VETO",
+        adjustment="Reject decision admission until the request satisfies Nova integrity requirements.",
+        constraint_category=constraint_category,
+        constraint_reason=reason,
+        impact_reason=impact_reason,
+        adjusted_size=0.0,
+        exception_entries=exception_entries,
+        rejection_entry=rejection_entry,
+    )
+
+
+def _parse_size_or_reject(
+    *,
+    api_key: str,
+    tier: str,
+    intent: Optional[str],
+    asset: Optional[str],
+    size_raw: Optional[str],
+    venue: Optional[str],
+    strategy: Optional[str],
+) -> tuple[Optional[float], Optional[JSONResponse]]:
+    if size_raw is None or not str(size_raw).strip():
+        return None, _reject_decision(
+            status_code=422,
+            api_key=api_key,
+            tier=tier,
+            intent=intent,
+            asset=asset,
+            size_raw=size_raw,
+            venue=venue,
+            strategy=strategy,
+            constraint_category="incomplete_decision_record",
+            reason="Decision admission requires a numeric size before any evaluation can occur.",
+            impact_reason="Nova blocked the request because a complete decision record was not supplied before execution.",
+        )
+
+    normalized = _normalize_text(size_raw)
+    if normalized in AMBIGUOUS_LANGUAGE_TERMS:
+        return None, _reject_decision(
+            status_code=422,
+            api_key=api_key,
+            tier=tier,
+            intent=intent,
+            asset=asset,
+            size_raw=size_raw,
+            venue=venue,
+            strategy=strategy,
+            constraint_category="ambiguous_constraint_language",
+            reason="Ambiguous sizing language is not admissible. Provide a specific numeric size.",
+            impact_reason="Nova blocked the request because vague operator language cannot substitute for an admissible decision structure.",
+        )
+
+    try:
+        parsed = float(size_raw)
+    except (TypeError, ValueError):
+        return None, _reject_decision(
+            status_code=422,
+            api_key=api_key,
+            tier=tier,
+            intent=intent,
+            asset=asset,
+            size_raw=size_raw,
+            venue=venue,
+            strategy=strategy,
+            constraint_category="invalid_size_format",
+            reason="Decision admission requires a valid numeric size.",
+            impact_reason="Nova blocked the request because the size field could not be evaluated structurally.",
+        )
+
+    return parsed, None
+
+
+def _validate_decision_fields(
+    *,
+    api_key: str,
+    tier: str,
+    intent: Optional[str],
+    asset: Optional[str],
+    size_raw: Optional[str],
+    venue: Optional[str],
+    strategy: Optional[str],
+) -> Optional[JSONResponse]:
+    normalized_intent = _normalize_text(intent)
+    if not normalized_intent:
+        return _reject_decision(
+            status_code=422,
+            api_key=api_key,
+            tier=tier,
+            intent=intent,
+            asset=asset,
+            size_raw=size_raw,
+            venue=venue,
+            strategy=strategy,
+            constraint_category="incomplete_decision_record",
+            reason="Decision admission requires an intent before any evaluation can occur.",
+            impact_reason="Nova blocked the request because no decision intent was supplied before execution.",
+        )
+
+    if not _normalize_text(asset):
+        return _reject_decision(
+            status_code=422,
+            api_key=api_key,
+            tier=tier,
+            intent=intent,
+            asset=asset,
+            size_raw=size_raw,
+            venue=venue,
+            strategy=strategy,
+            constraint_category="incomplete_decision_record",
+            reason="Decision admission requires an asset before any evaluation can occur.",
+            impact_reason="Nova blocked the request because no asset was supplied before execution.",
+        )
+
+    if normalized_intent in RISK_INCREASING_INTENTS:
+        _, rejection_response = _parse_size_or_reject(
+            api_key=api_key,
+            tier=tier,
+            intent=intent,
+            asset=asset,
+            size_raw=size_raw,
+            venue=venue,
+            strategy=strategy,
+        )
+        if rejection_response:
+            return rejection_response
+    return None
+
+
+def _exception_response_if_needed(
+    *,
+    api_key: str,
+    tier: str,
+    intent: Optional[str],
+    asset: Optional[str],
+    size_raw: Optional[str],
+    venue: Optional[str],
+    strategy: Optional[str],
+) -> Optional[JSONResponse]:
+    exception_descriptors = _detect_exception_categories(intent, asset, venue, strategy)
+    if not exception_descriptors:
+        return None
+    return _reject_decision(
+        status_code=409,
+        api_key=api_key,
+        tier=tier,
+        intent=intent,
+        asset=asset,
+        size_raw=size_raw,
+        venue=venue,
+        strategy=strategy,
+        constraint_category="process_integrity_violation",
+        reason="Nova rejected the request because process integrity language indicated bypass, override, retroactive, or delayed-control behavior.",
+        impact_reason="Nova blocked the request because abnormal process language cannot enter the decision path before execution.",
+        exception_descriptors=exception_descriptors,
+    )
 
 
 def epoch_hash(epoch: int, timestamp_utc: str, constitution_version: str, regime: str) -> str:
@@ -1096,38 +1525,63 @@ def get_context(
     x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
     intent: Optional[str] = Query(default=None),
     asset: Optional[str] = Query(default=None),
-    size: Optional[float] = Query(default=None),
+    size: Optional[str] = Query(default=None),
     venue: Optional[str] = Query(default=None),
     strategy: Optional[str] = Query(default=None),
 ) -> JSONResponse:
     entitlement = require_entitlement(request, authorization, x_api_key)
+    validation_rejection = _validate_decision_fields(
+        api_key=entitlement["api_key"],
+        tier=entitlement["tier"],
+        intent=intent,
+        asset=asset,
+        size_raw=size,
+        venue=venue,
+        strategy=strategy,
+    )
+    if validation_rejection:
+        return validation_rejection
+
+    exception_rejection = _exception_response_if_needed(
+        api_key=entitlement["api_key"],
+        tier=entitlement["tier"],
+        intent=intent,
+        asset=asset,
+        size_raw=size,
+        venue=venue,
+        strategy=strategy,
+    )
+    if exception_rejection:
+        return exception_rejection
+
+    parsed_size = float(size) if size is not None else None
     epoch = get_current_epoch()
     timestamp = get_current_timestamp()
-    guardrail = build_guardrail(intent=intent, asset=asset, size=size)
-    baseline_decision_status = derive_decision_status(intent=intent, size=size, guardrail=guardrail)
+    guardrail = build_guardrail(intent=intent, asset=asset, size=parsed_size)
+    baseline_decision_status = derive_decision_status(intent=intent, size=parsed_size, guardrail=guardrail)
     reflex_memory_state, decision_status, adjustment_factor = apply_reflex_memory(
         regime=DEFAULT_REGIME,
         intent=intent,
         asset=asset,
-        size=size,
+        size=parsed_size,
         decision_status=baseline_decision_status,
     )
     adjustment = build_adjustment(
         decision_status=decision_status,
-        size=size,
+        size=parsed_size,
         guardrail=guardrail,
         adjustment_factor=adjustment_factor,
     )
     impact_on_outcomes = build_impact_on_outcomes(
         decision_status=decision_status,
-        size=size,
+        size=parsed_size,
         adjustment_factor=adjustment_factor,
     )
     historical_reference = build_historical_reference_from_reflex(reflex_memory_state)
     decision_context = {
         "intent": intent,
         "asset": asset,
-        "requested_size": size,
+        "requested_size": parsed_size,
         "regime": DEFAULT_REGIME,
         "epoch": epoch,
         "timestamp_utc": timestamp,
@@ -1138,10 +1592,27 @@ def get_context(
     constraint_analysis = build_constraint_analysis(
         intent=intent,
         asset=asset,
-        size=size,
+        size=parsed_size,
         guardrail=guardrail,
         decision_status=decision_status,
     )
+    decision_admission_record = {
+        "request_id": _build_request_id(
+            timestamp,
+            _request_snapshot(intent=intent, asset=asset, size_raw=size, venue=venue, strategy=strategy),
+        ),
+        "request_snapshot": _request_snapshot(intent=intent, asset=asset, size_raw=size, venue=venue, strategy=strategy),
+        "recorded_before_execution": True,
+    }
+
+    rejection_entry = None
+    if decision_status == "VETO":
+        rejection_entry = _record_rejection(
+            timestamp=timestamp,
+            constraint_category="guardrail_veto",
+            reason=constraint_analysis["why_this_happened"],
+            snapshot=decision_admission_record["request_snapshot"],
+        )
 
     payload = {
         "epoch": epoch,
@@ -1153,20 +1624,26 @@ def get_context(
         "transition_state": "stable_to_elevated_recent" if DEFAULT_REGIME == "Elevated Fragility" else "stable",
         "constitution_version": CONSTITUTION_VERSION,
         "tier": entitlement["tier"],
+        "decision_admission_record": decision_admission_record,
         "decision_context": decision_context,
         "constraint_analysis": constraint_analysis,
         "historical_reference": historical_reference,
         "impact_on_outcomes": impact_on_outcomes,
         "adjustment": adjustment,
         "decision_status": decision_status,
+        "exception_register": [],
+        "rejection_ledger": rejection_entry,
+        "escalation_flag": False,
+        "halt_recommendation": None,
+        "integrity_state": "operational",
     }
 
     if asset:
         payload["asset"] = asset
     if intent:
         payload["intent"] = intent
-    if size is not None:
-        payload["size"] = size
+    if parsed_size is not None:
+        payload["size"] = parsed_size
     if venue:
         payload["venue"] = venue
     if strategy:

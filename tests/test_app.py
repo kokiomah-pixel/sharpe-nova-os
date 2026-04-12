@@ -99,9 +99,18 @@ def client():
         app_module = importlib.import_module("app")
         app = app_module.app
         USAGE_TRACKING = app_module.USAGE_TRACKING
+        REJECTION_LEDGER = app_module.REJECTION_LEDGER
+        EXCEPTION_REGISTER = app_module.EXCEPTION_REGISTER
+        HALT_SIGNAL_STATE = app_module.HALT_SIGNAL_STATE
         USAGE_TRACKING.clear()
+        REJECTION_LEDGER.clear()
+        EXCEPTION_REGISTER.clear()
+        HALT_SIGNAL_STATE.clear()
         yield TestClient(app)
         USAGE_TRACKING.clear()
+        REJECTION_LEDGER.clear()
+        EXCEPTION_REGISTER.clear()
+        HALT_SIGNAL_STATE.clear()
         try:
             os.remove(".usage.test.json")
         except FileNotFoundError:
@@ -156,7 +165,10 @@ def test_billable_endpoints_increment_usage(client):
         
         # Make a call to the billable endpoint
         headers = {"Authorization": "Bearer admin-key"}
-        response = client.get(endpoint, headers=headers)
+        if endpoint == "/v1/context":
+            response = client.get(endpoint, headers=headers, params={"intent": "trade", "asset": "ETH", "size": 10000})
+        else:
+            response = client.get(endpoint, headers=headers)
         assert response.status_code == 200, f"Endpoint {endpoint} failed with status {response.status_code}"
         
         # Verify usage was tracked
@@ -235,11 +247,11 @@ def test_quota_only_for_billable_endpoints(client):
         assert response.status_code == 200, "Non-billable /v1/usage should not be rate-limited"
     
     # Make one billable call - should succeed (quota is 1)
-    response = client.get("/v1/context", headers=headers)
+    response = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "ETH", "size": 10000})
     assert response.status_code == 200, "First billable call should succeed"
     
     # Make another billable call - should fail (quota exceeded)
-    response = client.get("/v1/context", headers=headers)
+    response = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "ETH", "size": 10000})
     assert response.status_code == 429, "Second billable call should fail with 429 quota exceeded"
 
 
@@ -393,3 +405,88 @@ def test_reflex_schema_backward_compatibility_holds(client):
     assert payload["memory_context"]["sequence_type"] == payload["historical_reference"]["sequence_type"]
     assert "consequence_pattern" in payload["memory_context"]
     assert payload["reflex_memory"]["schema_version"] == "1.0"
+
+
+def test_missing_size_is_rejected_with_rejection_ledger(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH"},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["decision_status"] == "VETO"
+    assert payload["constraint_analysis"]["constraint_category"] == "incomplete_decision_record"
+    assert payload["rejection_ledger"]["constraint_category"] == "incomplete_decision_record"
+    assert payload["decision_admission_record"]["recorded_before_execution"] is True
+
+
+def test_ambiguous_size_language_rejected_with_specific_reason(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": "small size"},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["decision_status"] == "VETO"
+    assert payload["constraint_analysis"]["constraint_category"] == "ambiguous_constraint_language"
+    assert "specific numeric size" in payload["constraint_analysis"]["why_this_happened"].lower()
+    assert payload["rejection_ledger"]["reason"]
+
+
+def test_bypass_attempt_creates_exception_register_entry(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={
+            "intent": "trade",
+            "asset": "ETH",
+            "size": 10000,
+            "strategy": "skip validation just execute route directly",
+        },
+    )
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["decision_status"] == "VETO"
+    assert payload["exception_register"]
+    categories = {entry["category"] for entry in payload["exception_register"]}
+    assert "bypass_attempt" in categories
+    assert payload["rejection_ledger"]["constraint_category"] == "process_integrity_violation"
+
+
+def test_compound_integrity_failures_raise_halt_recommendation(client):
+    headers = {"Authorization": "Bearer admin-key"}
+    client.get(
+        "/v1/context",
+        headers=headers,
+        params={
+            "intent": "trade",
+            "asset": "ETH",
+            "size": 500000,
+            "strategy": "override delay bypass",
+        },
+    )
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={
+            "intent": "trade",
+            "asset": "ETH",
+            "size": 500000,
+            "strategy": "override delay bypass repeat",
+        },
+    )
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["escalation_flag"] is True
+    assert payload["halt_recommendation"]
+    assert payload["integrity_state"] == "halt_recommended"
+
