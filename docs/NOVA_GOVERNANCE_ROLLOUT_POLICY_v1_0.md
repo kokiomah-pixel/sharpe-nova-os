@@ -91,6 +91,13 @@ Each layer:
 
 Nova rollout progresses through key-level activation states:
 
+## Activation Matrix (Corrected Interpretation)
+
+- baseline -> public/default usage
+- controlled_governance -> limited/internal rollout
+- full_governance -> institutional readiness
+- hyperliquid_proving_ground -> private Architect-controlled proving only
+
 ### Baseline
 
 Definition:
@@ -144,6 +151,37 @@ Hyperliquid:
 - does NOT modify Nova core
 - is ONLY a proving environment
 
+## Non-Exposure Rule — Proving Environments
+
+Proving environments must not be exposed externally.
+
+This includes:
+- no public API keys
+- no onboarding flows referencing proving environments
+- no documentation positioning proving environments as usable tiers
+
+All proving-ground activity is internal to Nova system validation.
+
+Violation of this rule creates:
+- category confusion
+- operator misuse
+- governance misinterpretation
+
+### Hyperliquid Consumption Order
+
+Hyperliquid must consume Nova outputs in the following order:
+
+1. Submit a decision and receive the full Nova context.
+2. Respect `decision_status` first.
+3. Treat all other fields as explanatory and non-optional.
+
+Hyperliquid must NOT:
+- interpret fields instead of `decision_status`
+- optimize around fields
+- selectively apply fields
+
+This prevents enforcement from degrading into field-based heuristics.
+
 ### Custom
 
 Definition:
@@ -192,21 +230,97 @@ Purpose:
 - environment classification derived from configuration
 - no runtime mode switching
 
+### Proving Ground Fields
+
+- `proving_ground`: boolean  
+- `proving_ground_name`: string (optional)
+
+### Interpretation
+
+- `proving_ground = true` indicates the key is operating in a **private internal proving environment**
+- `proving_ground_name` identifies the proving domain (e.g., `"hyperliquid"`)
+
+### Constraint
+
+Proving ground classification does not imply:
+- public availability
+- external access
+- productization
+
+It is strictly an internal classification for governance validation.
+
 ---
 
 ## 7. Environment Classification
 
-Derived strictly from key configuration:
-- `baseline`
-- `controlled_governance`
-- `full_governance`
-- `hyperliquid_proving_ground`
-- `custom`
+Environment classification is descriptive and derived from key configuration.
+
+| Classification | Description | Access Level |
+|----------------------------------|--------------------------------------------------|---------------------|
+| baseline | No governance layers active | Public / Default |
+| controlled_governance | Partial governance (Sprints 1–3/5) | Limited / Internal |
+| full_governance | All governance layers active (Sprints 1–9) | Internal / Pre-prod |
+| hyperliquid_proving_ground | Full governance + adversarial validation | **Private Only** |
+| custom | Non-standard configuration | Case-by-case |
 
 Classification:
 - is descriptive
 - is not used for logic branching
 - does not alter admission behavior
+
+## Hyperliquid Proving Ground — Classification
+
+The Hyperliquid environment is a **private proving ground**.
+
+It is not:
+- a public deployment environment
+- a product tier
+- an externally accessible governance mode
+- a distribution surface for Nova
+
+It is:
+- an internal Architect-controlled proving environment
+- an adversarial testing domain for governance validation
+- a runtime consumer of Nova API outputs under real market pressure
+
+### Operational Constraints
+
+- Access is restricted to a single internal proving key.
+- This key is not distributed, documented for public use, or exposed as part of onboarding.
+- No external operator or allocator interacts directly with this environment.
+
+### Purpose
+
+The Hyperliquid proving ground exists to:
+
+- stress-test Nova governance layers under real conditions
+- validate denial-first behavior under pressure
+- generate reflex memory candidates
+- confirm system-state transitions under adversarial input
+
+### Category Protection Rule
+
+Hyperliquid must never define Nova’s category.
+
+All external framing must remain:
+
+> Sharpe Nova OS is a pre-execution decision discipline layer.
+
+Not:
+- a trading system
+- a Hyperliquid system
+- a perps execution engine
+
+### Enforcement Rule
+
+Hyperliquid consumes Nova outputs.
+
+It does not:
+- interpret governance fields
+- override `decision_status`
+- introduce execution-side logic into Nova
+
+Nova remains the sole source of decision authority.
 
 ---
 
@@ -237,6 +351,30 @@ Governance rollout must NOT:
 - introduce signal generation
 - introduce environment-based branching
 
+Decision-consuming adapters must NOT:
+- replace `decision_status` with local heuristics
+- downgrade explanatory governance fields into optional hints
+- apply only a subset of Nova's decision surface
+
+### Decision Response Completeness
+
+For `/v1/context`, Nova's decision surface must remain complete across every decision path.
+
+Every decision response must include:
+- `decision_status`
+- `constraint_trace`
+- `system_state`
+- relevant governance fields for the active control plane
+
+This completeness requirement applies to:
+- admission paths
+- rejection paths
+- delay paths
+- reduce paths
+- halt paths
+
+If omission re-enters through partial decision responses, ambiguity re-enters with it.
+
 Critical rule:
 
 > Nova conditions capital before execution. It does not decide what to execute.
@@ -258,6 +396,18 @@ This rollout model ensures:
 Sharpe Nova OS governance rollout is:
 
 > a key-level activation system that enables progressive enforcement without compromising Nova's identity as decision discipline infrastructure
+
+---
+
+## Final Clarification
+
+Hyperliquid is not a deployment environment.
+
+It is a proving ground.
+
+Nova is not defined by where it is tested.
+
+Nova is defined by how it governs decisions before execution.
 
 ---
 
