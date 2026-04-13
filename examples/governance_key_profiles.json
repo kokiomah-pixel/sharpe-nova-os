@@ -1,0 +1,219 @@
+{
+  "baseline_key": {
+    "owner": "external-baseline",
+    "tier": "free",
+    "status": "active",
+    "monthly_quota": 100,
+    "allowed_endpoints": [
+      "/v1/regime",
+      "/v1/epoch",
+      "/v1/context",
+      "/v1/key-info",
+      "/v1/governance-profile",
+      "/v1/usage",
+      "/health"
+    ]
+  },
+  "controlled_key": {
+    "owner": "internal-controlled",
+    "tier": "pro",
+    "status": "active",
+    "monthly_quota": 1000,
+    "allowed_endpoints": [
+      "/v1/regime",
+      "/v1/epoch",
+      "/v1/context",
+      "/v1/key-info",
+      "/v1/governance-profile",
+      "/v1/usage",
+      "/health"
+    ],
+    "temporal_governance": {
+      "window_seconds": 60,
+      "max_requests_per_window": 3,
+      "deny_cooldown_seconds": 120,
+      "halt_cooldown_seconds": 300,
+      "retry_spacing_seconds": 30,
+      "halt_threshold": 4
+    },
+    "loop_integrity": {
+      "pressure_similarity_threshold": 0.75,
+      "ambiguous_similarity_threshold": 0.4,
+      "retry_block_threshold": 2,
+      "pressure_escalation_threshold": 3,
+      "denial_history_limit": 10
+    },
+    "telemetry_integrity": {
+      "stale_after_seconds": 300,
+      "default_min_reliability": 0.75,
+      "risk_increasing_min_reliability": 0.85,
+      "risk_reducing_min_reliability": 0.65,
+      "disagreement_threshold": 0.35,
+      "halt_disagreement_threshold": 0.7,
+      "halt_on_degraded": true
+    }
+  },
+  "full_governance_key": {
+    "owner": "allocator-full-governance",
+    "tier": "enterprise",
+    "status": "active",
+    "monthly_quota": 5000,
+    "allowed_endpoints": [
+      "/v1/regime",
+      "/v1/epoch",
+      "/v1/context",
+      "/v1/key-info",
+      "/v1/governance-profile",
+      "/v1/usage",
+      "/health"
+    ],
+    "temporal_governance": {
+      "window_seconds": 60,
+      "max_requests_per_window": 2,
+      "deny_cooldown_seconds": 180,
+      "halt_cooldown_seconds": 600,
+      "retry_spacing_seconds": 45,
+      "halt_threshold": 3
+    },
+    "loop_integrity": {
+      "pressure_similarity_threshold": 0.75,
+      "ambiguous_similarity_threshold": 0.4,
+      "retry_block_threshold": 2,
+      "pressure_escalation_threshold": 3,
+      "denial_history_limit": 10
+    },
+    "telemetry_integrity": {
+      "stale_after_seconds": 180,
+      "default_min_reliability": 0.8,
+      "risk_increasing_min_reliability": 0.9,
+      "risk_reducing_min_reliability": 0.7,
+      "disagreement_threshold": 0.3,
+      "halt_disagreement_threshold": 0.65,
+      "halt_on_degraded": true
+    },
+    "system_state": {
+      "profile": "full_governance"
+    },
+    "permission_budgeting": {
+      "default_daily_budget": 50000,
+      "risk_increasing_daily_budget": 25000,
+      "risk_reducing_daily_budget": 100000,
+      "exception_budget": 1,
+      "low_remaining_ratio": 0.2,
+      "delay_on_exhaustion": false,
+      "halt_on_compounded_pressure": true
+    },
+    "halt_release_governance": {
+      "release_authority": "authorized_operator",
+      "required_evidence": [
+        "control_integrity_review",
+        "fresh_telemetry_confirmation"
+      ],
+      "post_release_cooldown_seconds": 300
+    },
+    "human_intervention_taxonomy": {
+      "profile": "bounded_auditable"
+    },
+    "decision_queue_governance": {
+      "request_ttl_seconds": 300,
+      "expire_on_regime_change": true,
+      "expire_on_epoch_change": true
+    },
+    "memory_governance": {
+      "admissible_reflex_classes": [
+        "fragility_escalation",
+        "liquidity_deterioration",
+        "baseline_monitoring"
+      ],
+      "memory_age_seconds": 0,
+      "stale_after_seconds": 3600,
+      "aging_after_ratio": 0.5,
+      "confidence_weights": {
+        "validated": 1.0,
+        "observed": 0.5
+      }
+    }
+  },
+  "hyperliquid_proving_ground_key": {
+    "owner": "internal-hyperliquid-proving-ground",
+    "tier": "enterprise",
+    "status": "active",
+    "monthly_quota": 10000,
+    "proving_ground": "hyperliquid",
+    "allowed_endpoints": [
+      "/v1/regime",
+      "/v1/epoch",
+      "/v1/context",
+      "/v1/key-info",
+      "/v1/governance-profile",
+      "/v1/usage",
+      "/health"
+    ],
+    "temporal_governance": {
+      "window_seconds": 30,
+      "max_requests_per_window": 1,
+      "deny_cooldown_seconds": 300,
+      "halt_cooldown_seconds": 900,
+      "retry_spacing_seconds": 60,
+      "halt_threshold": 2
+    },
+    "loop_integrity": {
+      "pressure_similarity_threshold": 0.7,
+      "ambiguous_similarity_threshold": 0.35,
+      "retry_block_threshold": 1,
+      "pressure_escalation_threshold": 2,
+      "denial_history_limit": 20
+    },
+    "telemetry_integrity": {
+      "stale_after_seconds": 120,
+      "default_min_reliability": 0.85,
+      "risk_increasing_min_reliability": 0.95,
+      "risk_reducing_min_reliability": 0.75,
+      "disagreement_threshold": 0.25,
+      "halt_disagreement_threshold": 0.5,
+      "halt_on_degraded": true
+    },
+    "system_state": {
+      "profile": "proving_ground"
+    },
+    "permission_budgeting": {
+      "default_daily_budget": 25000,
+      "risk_increasing_daily_budget": 10000,
+      "risk_reducing_daily_budget": 50000,
+      "exception_budget": 0,
+      "low_remaining_ratio": 0.15,
+      "delay_on_exhaustion": false,
+      "halt_on_compounded_pressure": true
+    },
+    "halt_release_governance": {
+      "release_authority": "authorized_operator",
+      "required_evidence": [
+        "control_integrity_review",
+        "fresh_telemetry_confirmation"
+      ],
+      "post_release_cooldown_seconds": 600
+    },
+    "human_intervention_taxonomy": {
+      "profile": "strict"
+    },
+    "decision_queue_governance": {
+      "request_ttl_seconds": 180,
+      "expire_on_regime_change": true,
+      "expire_on_epoch_change": true
+    },
+    "memory_governance": {
+      "admissible_reflex_classes": [
+        "fragility_escalation",
+        "liquidity_deterioration",
+        "baseline_monitoring"
+      ],
+      "memory_age_seconds": 0,
+      "stale_after_seconds": 600,
+      "aging_after_ratio": 0.4,
+      "confidence_weights": {
+        "validated": 1.0,
+        "observed": 0.4
+      }
+    }
+  }
+}

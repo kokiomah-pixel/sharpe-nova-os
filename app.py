@@ -87,7 +87,7 @@ USAGE_FILE = Path(os.getenv("NOVA_USAGE_FILE", ".usage.json")).expanduser()
 
 # Billing policy
 BILLABLE_ENDPOINTS = {"/v1/context", "/v1/regime", "/v1/epoch"}
-NON_BILLABLE_ENDPOINTS = {"/health", "/v1/key-info", "/v1/usage"}
+NON_BILLABLE_ENDPOINTS = {"/health", "/v1/key-info", "/v1/governance-profile", "/v1/usage"}
 ADMIN_ONLY_ENDPOINTS = {"/v1/usage/reset"}
 
 NOVA_REDIS_URL = os.getenv("NOVA_REDIS_URL", "")
@@ -111,12 +111,38 @@ SYSTEM_STATE_REGISTRY: Dict[str, Dict[str, Any]] = {}
 PERMISSION_BUDGET_STATE: Dict[str, Dict[str, Any]] = {}
 HALT_RELEASE_STATE: Dict[str, Dict[str, Any]] = {}
 DECISION_QUEUE_STATE: Dict[str, Dict[str, Any]] = {}
+GOVERNANCE_PROFILE_LOGGED: set[str] = set()
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 PRICE_EMERGING_ID = os.getenv("STRIPE_PRICE_EMERGING_ID", "price_emerging_id")
 PRICE_CORE_ID = os.getenv("STRIPE_PRICE_CORE_ID", "price_core_id")
 PRICE_ENTERPRISE_ID = os.getenv("STRIPE_PRICE_ENTERPRISE_ID", "price_enterprise_id")
+
+GOVERNANCE_LAYER_CONFIG_KEYS = {
+    "temporal": "temporal_governance",
+    "loop": "loop_integrity",
+    "telemetry": "telemetry_integrity",
+    "system_state": "system_state",
+    "permission_budgeting": "permission_budgeting",
+    "halt_release": "halt_release_governance",
+    "human_intervention": "human_intervention_taxonomy",
+    "queue": "decision_queue_governance",
+    "memory": "memory_governance",
+}
+
+CONTROLLED_GOVERNANCE_LAYERS = {"temporal", "loop", "telemetry"}
+FULL_GOVERNANCE_LAYERS = {
+    "temporal",
+    "loop",
+    "telemetry",
+    "system_state",
+    "permission_budgeting",
+    "halt_release",
+    "human_intervention",
+    "queue",
+    "memory",
+}
 
 if stripe and STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
@@ -331,6 +357,7 @@ def load_key_registry() -> Dict[str, Dict[str, Any]]:
             "/v1/epoch",
             "/v1/context",
             "/v1/key-info",
+            "/v1/governance-profile",
             "/v1/usage",
             "/health",
         ])
@@ -348,6 +375,7 @@ def load_key_registry() -> Dict[str, Dict[str, Any]]:
             "/v1/epoch",
             "/v1/context",
             "/v1/key-info",
+            "/v1/governance-profile",
             "/v1/usage",
             "/v1/usage/reset",
             "/health",
@@ -365,6 +393,66 @@ def get_api_key_from_headers(authorization: Optional[str], x_api_key: Optional[s
     raise HTTPException(status_code=401, detail="Missing API key")
 
 
+def _configured_governance_layers(record: Dict[str, Any]) -> List[str]:
+    layers = []
+    for layer_name, config_key in GOVERNANCE_LAYER_CONFIG_KEYS.items():
+        config = record.get(config_key)
+        if isinstance(config, dict) and config:
+            layers.append(layer_name)
+    return layers
+
+
+def _governance_environment_classification(record: Dict[str, Any]) -> str:
+    layers = set(_configured_governance_layers(record))
+    proving_ground = _normalize_text(str(record.get("proving_ground") or ""))
+    if proving_ground == "hyperliquid" and FULL_GOVERNANCE_LAYERS.issubset(layers):
+        return "hyperliquid_proving_ground"
+    if not layers:
+        return "baseline"
+    if FULL_GOVERNANCE_LAYERS.issubset(layers):
+        return "full_governance"
+    if CONTROLLED_GOVERNANCE_LAYERS.issubset(layers):
+        return "controlled_governance"
+    return "custom"
+
+
+def _governance_thresholds(record: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    thresholds: Dict[str, Dict[str, Any]] = {}
+    for layer_name, config_key in GOVERNANCE_LAYER_CONFIG_KEYS.items():
+        config = record.get(config_key)
+        if isinstance(config, dict) and config:
+            thresholds[layer_name] = dict(config)
+    return thresholds
+
+
+def _governance_profile_payload(record: Dict[str, Any]) -> Dict[str, Any]:
+    active_layers = _configured_governance_layers(record)
+    proving_ground_name = str(record.get("proving_ground") or "").strip() or None
+    payload = {
+        "active_governance_layers": active_layers,
+        "environment_classification": _governance_environment_classification(record),
+        "thresholds": _governance_thresholds(record),
+        "proving_ground": bool(proving_ground_name),
+    }
+    if proving_ground_name:
+        payload["proving_ground_name"] = proving_ground_name
+    return payload
+
+
+def _emit_governance_profile_log(api_key: str, record: Dict[str, Any]) -> None:
+    if api_key in GOVERNANCE_PROFILE_LOGGED:
+        return
+    profile = _governance_profile_payload(record)
+    print(
+        "[GOVERNANCE PROFILE] "
+        f"api_key={api_key} "
+        f"environment={profile['environment_classification']} "
+        f"layers={profile['active_governance_layers']}",
+        file=sys.stderr,
+    )
+    GOVERNANCE_PROFILE_LOGGED.add(api_key)
+
+
 def get_key_record(api_key: str) -> Dict[str, Any]:
     registry = load_key_registry()
 
@@ -380,6 +468,8 @@ def get_key_record(api_key: str) -> Dict[str, Any]:
         if status == "inactive":
             raise HTTPException(status_code=403, detail="Inactive API key")
         raise HTTPException(status_code=403, detail="API key is not active")
+
+    _emit_governance_profile_log(api_key, record)
 
     return record
 
@@ -4021,12 +4111,31 @@ def key_info(
     x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
 ) -> JSONResponse:
     entitlement = require_entitlement(request, authorization, x_api_key)
+    governance_profile = _governance_profile_payload(entitlement["key_record"])
 
     payload = {
         "owner": entitlement["owner"],
         "tier": entitlement["tier"],
         "monthly_quota": entitlement["monthly_quota"],
         "allowed_endpoints": entitlement["allowed_endpoints"],
+        "active_governance_layers": governance_profile["active_governance_layers"],
+    }
+    payload["signature"] = sign_payload(payload)
+    return JSONResponse(payload)
+
+
+@app.get("/v1/governance-profile")
+def governance_profile(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+) -> JSONResponse:
+    entitlement = require_entitlement(request, authorization, x_api_key)
+    profile = _governance_profile_payload(entitlement["key_record"])
+
+    payload = {
+        "tier": entitlement["tier"],
+        **profile,
     }
     payload["signature"] = sign_payload(payload)
     return JSONResponse(payload)

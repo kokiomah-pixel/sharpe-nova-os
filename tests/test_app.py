@@ -150,6 +150,83 @@ TEST_KEYS = {
             "denial_history_limit": 10,
         },
     },
+    "full-governance-key": {
+        "owner": "full-governance-user",
+        "tier": "enterprise",
+        "status": "active",
+        "monthly_quota": 1000,
+        "allowed_endpoints": [
+            "/v1/regime",
+            "/v1/epoch",
+            "/v1/context",
+            "/v1/key-info",
+            "/v1/governance-profile",
+            "/v1/usage",
+        ],
+        "temporal_governance": {
+            "window_seconds": 60,
+            "max_requests_per_window": 2,
+            "deny_cooldown_seconds": 180,
+            "halt_cooldown_seconds": 600,
+            "retry_spacing_seconds": 45,
+            "halt_threshold": 3,
+        },
+        "loop_integrity": {
+            "pressure_similarity_threshold": 0.75,
+            "ambiguous_similarity_threshold": 0.4,
+            "retry_block_threshold": 2,
+            "pressure_escalation_threshold": 3,
+            "denial_history_limit": 10,
+        },
+        "telemetry_integrity": {
+            "stale_after_seconds": 180,
+            "default_min_reliability": 0.8,
+            "risk_increasing_min_reliability": 0.9,
+            "risk_reducing_min_reliability": 0.7,
+            "disagreement_threshold": 0.3,
+            "halt_disagreement_threshold": 0.65,
+            "halt_on_degraded": True,
+        },
+        "system_state": {
+            "profile": "full_governance",
+        },
+        "permission_budgeting": {
+            "default_daily_budget": 50000,
+            "risk_increasing_daily_budget": 25000,
+            "risk_reducing_daily_budget": 100000,
+            "exception_budget": 1,
+            "low_remaining_ratio": 0.2,
+            "delay_on_exhaustion": False,
+            "halt_on_compounded_pressure": True,
+        },
+        "halt_release_governance": {
+            "release_authority": "authorized_operator",
+            "required_evidence": ["control_integrity_review", "fresh_telemetry_confirmation"],
+            "post_release_cooldown_seconds": 300,
+        },
+        "human_intervention_taxonomy": {
+            "profile": "bounded_auditable",
+        },
+        "decision_queue_governance": {
+            "request_ttl_seconds": 300,
+            "expire_on_regime_change": True,
+            "expire_on_epoch_change": True,
+        },
+        "memory_governance": {
+            "admissible_reflex_classes": [
+                "fragility_escalation",
+                "liquidity_deterioration",
+                "baseline_monitoring",
+            ],
+            "memory_age_seconds": 0,
+            "stale_after_seconds": 3600,
+            "aging_after_ratio": 0.5,
+            "confidence_weights": {
+                "validated": 1.0,
+                "observed": 0.5,
+            },
+        },
+    },
 }
 
 
@@ -368,6 +445,70 @@ def test_suspended_key_rejected_with_specific_message(client):
     response = client.get("/v1/context", headers={"Authorization": "Bearer suspended-key"})
     assert response.status_code == 403
     assert response.json()["detail"] == "Suspended API key"
+
+
+def test_key_info_surfaces_active_governance_layers(client):
+    response = client.get("/v1/key-info", headers={"Authorization": "Bearer full-governance-key"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "active_governance_layers" in payload
+    assert set(payload["active_governance_layers"]) == {
+        "temporal",
+        "loop",
+        "telemetry",
+        "system_state",
+        "permission_budgeting",
+        "halt_release",
+        "human_intervention",
+        "queue",
+        "memory",
+    }
+
+
+def test_governance_profile_endpoint_returns_enabled_layers_and_environment(client):
+    response = client.get("/v1/governance-profile", headers={"Authorization": "Bearer full-governance-key"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["environment_classification"] == "full_governance"
+    assert set(payload["active_governance_layers"]) == {
+        "temporal",
+        "loop",
+        "telemetry",
+        "system_state",
+        "permission_budgeting",
+        "halt_release",
+        "human_intervention",
+        "queue",
+        "memory",
+    }
+    assert "thresholds" in payload
+    assert payload["thresholds"]["temporal"]["max_requests_per_window"] == 2
+    assert payload["thresholds"]["queue"]["request_ttl_seconds"] == 300
+    assert payload["proving_ground"] is False
+
+
+def test_governance_profile_endpoint_marks_hyperliquid_proving_ground(client):
+    app_module = importlib.import_module("app")
+    keys = json.loads(json.dumps(TEST_KEYS))
+    keys["hyperliquid-key"] = {
+        **keys["full-governance-key"],
+        "owner": "hyperliquid-user",
+        "proving_ground": "hyperliquid",
+    }
+
+    with patch.dict(os.environ, {"NOVA_KEYS_JSON": json.dumps(keys), "NOVA_USAGE_FILE": ".usage.test.json"}):
+        sys.modules.pop("app", None)
+        app_module = importlib.import_module("app")
+        test_client = TestClient(app_module.app)
+        response = test_client.get("/v1/governance-profile", headers={"Authorization": "Bearer hyperliquid-key"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["environment_classification"] == "hyperliquid_proving_ground"
+    assert payload["proving_ground"] is True
+    assert payload["proving_ground_name"] == "hyperliquid"
 
 
 def test_context_changes_with_large_size(client):
