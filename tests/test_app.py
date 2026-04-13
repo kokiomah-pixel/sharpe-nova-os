@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+from datetime import datetime, timezone
 import pytest
 import sys
 from fastapi.testclient import TestClient
@@ -87,6 +88,68 @@ TEST_KEYS = {
             "/v1/usage/reset",
         ],
     },
+    "temporal-key": {
+        "owner": "temporal-user",
+        "tier": "pro",
+        "status": "active",
+        "monthly_quota": 100,
+        "allowed_endpoints": [
+            "/v1/regime",
+            "/v1/epoch",
+            "/v1/context",
+            "/v1/key-info",
+            "/v1/usage",
+        ],
+        "temporal_governance": {
+            "window_seconds": 60,
+            "max_requests_per_window": 2,
+            "deny_cooldown_seconds": 120,
+            "halt_cooldown_seconds": 300,
+            "retry_spacing_seconds": 30,
+            "halt_threshold": 3,
+        },
+    },
+    "temporal-halt-key": {
+        "owner": "temporal-halt-user",
+        "tier": "pro",
+        "status": "active",
+        "monthly_quota": 100,
+        "allowed_endpoints": [
+            "/v1/regime",
+            "/v1/epoch",
+            "/v1/context",
+            "/v1/key-info",
+            "/v1/usage",
+        ],
+        "temporal_governance": {
+            "window_seconds": 60,
+            "max_requests_per_window": 0,
+            "deny_cooldown_seconds": 0,
+            "halt_cooldown_seconds": 300,
+            "retry_spacing_seconds": 0,
+            "halt_threshold": 2,
+        },
+    },
+    "loop-key": {
+        "owner": "loop-user",
+        "tier": "pro",
+        "status": "active",
+        "monthly_quota": 100,
+        "allowed_endpoints": [
+            "/v1/regime",
+            "/v1/epoch",
+            "/v1/context",
+            "/v1/key-info",
+            "/v1/usage",
+        ],
+        "loop_integrity": {
+            "pressure_similarity_threshold": 0.75,
+            "ambiguous_similarity_threshold": 0.4,
+            "retry_block_threshold": 2,
+            "pressure_escalation_threshold": 3,
+            "denial_history_limit": 10,
+        },
+    },
 }
 
 
@@ -103,17 +166,32 @@ def client():
         EXCEPTION_REGISTER = app_module.EXCEPTION_REGISTER
         HALT_SIGNAL_STATE = app_module.HALT_SIGNAL_STATE
         DECISION_ADMISSION_STATE = app_module.DECISION_ADMISSION_STATE
+        TEMPORAL_GOVERNANCE_STATE = app_module.TEMPORAL_GOVERNANCE_STATE
+        LOOP_INTEGRITY_STATE = app_module.LOOP_INTEGRITY_STATE
+        SYSTEM_STATE_REGISTRY = app_module.SYSTEM_STATE_REGISTRY
+        PERMISSION_BUDGET_STATE = app_module.PERMISSION_BUDGET_STATE
+        HALT_RELEASE_STATE = app_module.HALT_RELEASE_STATE
         USAGE_TRACKING.clear()
         REJECTION_LEDGER.clear()
         EXCEPTION_REGISTER.clear()
         HALT_SIGNAL_STATE.clear()
         DECISION_ADMISSION_STATE.clear()
+        TEMPORAL_GOVERNANCE_STATE.clear()
+        LOOP_INTEGRITY_STATE.clear()
+        SYSTEM_STATE_REGISTRY.clear()
+        PERMISSION_BUDGET_STATE.clear()
+        HALT_RELEASE_STATE.clear()
         yield TestClient(app)
         USAGE_TRACKING.clear()
         REJECTION_LEDGER.clear()
         EXCEPTION_REGISTER.clear()
         HALT_SIGNAL_STATE.clear()
         DECISION_ADMISSION_STATE.clear()
+        TEMPORAL_GOVERNANCE_STATE.clear()
+        LOOP_INTEGRITY_STATE.clear()
+        SYSTEM_STATE_REGISTRY.clear()
+        PERMISSION_BUDGET_STATE.clear()
+        HALT_RELEASE_STATE.clear()
         try:
             os.remove(".usage.test.json")
         except FileNotFoundError:
@@ -462,6 +540,10 @@ def test_bypass_attempt_creates_exception_register_entry(client):
     categories = {entry["category"] for entry in payload["exception_register"]}
     assert "bypass_attempt" in categories
     assert payload["rejection_ledger"]["constraint_category"] == "process_integrity_violation"
+    assert payload["human_intervention_type"] == "exception_authorization_required"
+    assert payload["human_intervention_required"] is True
+    assert payload["authorization_scope"] == "process_integrity_exception_authorization"
+    assert payload["intervention_reason"] == "process_integrity_violation"
 
 
 def test_compound_integrity_failures_raise_halt_recommendation(client):
@@ -492,6 +574,10 @@ def test_compound_integrity_failures_raise_halt_recommendation(client):
     assert payload["escalation_flag"] is True
     assert payload["halt_recommendation"]
     assert payload["integrity_state"] == "halt_recommended"
+    assert payload["human_intervention_type"] == "override_attempt_detected"
+    assert payload["human_intervention_required"] is True
+    assert payload["authorization_scope"] == "generic_override_prohibited"
+    assert payload["intervention_reason"] == "override_attempt_detected"
 
 
 def test_stablecoin_trace_enrichment_present(client):
@@ -577,3 +663,112 @@ def test_cross_decision_pressure_is_visible(client):
     assert trace["related_prior_decisions"]
     assert trace["accumulated_constraint_category"] == "exposure_compounding"
     assert trace["exposure_compounding_detected"] is True
+
+
+def test_temporal_retry_spacing_delays_valid_decision(client, monkeypatch):
+    app_module = importlib.import_module("app")
+    current_time = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(app_module, "get_current_datetime", lambda: current_time)
+
+    headers = {"Authorization": "Bearer temporal-key"}
+    params = {"intent": "trade", "asset": "ETH", "size": 10000}
+
+    first = client.get("/v1/context", headers=headers, params=params)
+    second = client.get("/v1/context", headers=headers, params=params)
+
+    assert first.status_code == 200
+    assert first.json()["temporal_constraint_triggered"] is False
+    assert second.status_code == 429
+    payload = second.json()
+    assert payload["decision_status"] == "DELAY"
+    assert payload["cooldown_active"] is True
+    assert payload["cooldown_state"]["reason"] == "retry_spacing_active"
+    assert payload["temporal_constraint_triggered"] is True
+    assert payload["retry_cooldown_expiry"] is not None
+
+
+def test_temporal_request_rate_limit_sets_deny_cooldown(client, monkeypatch):
+    app_module = importlib.import_module("app")
+    current_time = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(app_module, "get_current_datetime", lambda: current_time)
+
+    headers = {"Authorization": "Bearer temporal-key"}
+
+    first = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "ETH", "size": 10000})
+    current_time = datetime(2026, 1, 1, 12, 0, 31, tzinfo=timezone.utc)
+    second = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "BTC", "size": 10000})
+    current_time = datetime(2026, 1, 1, 12, 0, 59, tzinfo=timezone.utc)
+    third = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "SOL", "size": 10000})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 429
+    payload = third.json()
+    assert payload["decision_status"] == "DENY"
+    assert payload["decision_count_window"]["request_count"] == 3
+    assert payload["decision_count_window"]["max_requests"] == 2
+    assert payload["cooldown_state"]["reason"] == "deny_cooldown_active"
+    assert payload["temporal_constraint_triggered"] is True
+
+
+def test_temporal_cooldown_expiry_resets_behavior(client, monkeypatch):
+    app_module = importlib.import_module("app")
+    current_time = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(app_module, "get_current_datetime", lambda: current_time)
+
+    headers = {"Authorization": "Bearer temporal-key"}
+
+    client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "ETH", "size": 10000})
+    current_time = datetime(2026, 1, 1, 12, 0, 31, tzinfo=timezone.utc)
+    client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "BTC", "size": 10000})
+    current_time = datetime(2026, 1, 1, 12, 0, 59, tzinfo=timezone.utc)
+    denied = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "SOL", "size": 10000})
+    current_time = datetime(2026, 1, 1, 12, 5, 1, tzinfo=timezone.utc)
+    allowed = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "ADA", "size": 10000})
+
+    assert denied.status_code == 429
+    assert denied.json()["decision_status"] == "DENY"
+    assert allowed.status_code == 200
+    payload = allowed.json()
+    assert payload["temporal_constraint_triggered"] is False
+    assert payload["cooldown_active"] is False
+
+
+def test_temporal_checks_run_before_core_admission_logic(client, monkeypatch):
+    app_module = importlib.import_module("app")
+    current_time = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(app_module, "get_current_datetime", lambda: current_time)
+
+    headers = {"Authorization": "Bearer temporal-key"}
+    client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "ETH", "size": 10000})
+
+    def fail_guardrail(*args, **kwargs):
+        raise AssertionError("build_guardrail should not run when temporal governance blocks first")
+
+    monkeypatch.setattr(app_module, "build_guardrail", fail_guardrail)
+    blocked = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "ETH", "size": 10000})
+
+    assert blocked.status_code == 429
+    assert blocked.json()["decision_status"] == "DELAY"
+
+
+def test_temporal_halt_quarantine_blocks_further_admission(client, monkeypatch):
+    app_module = importlib.import_module("app")
+    current_time = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(app_module, "get_current_datetime", lambda: current_time)
+
+    headers = {"Authorization": "Bearer temporal-halt-key"}
+    client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "ETH", "size": 10000})
+    current_time = datetime(2026, 1, 1, 12, 0, 20, tzinfo=timezone.utc)
+    client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "BTC", "size": 10000})
+    current_time = datetime(2026, 1, 1, 12, 0, 40, tzinfo=timezone.utc)
+    halted = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "SOL", "size": 10000})
+    current_time = datetime(2026, 1, 1, 12, 0, 50, tzinfo=timezone.utc)
+    quarantined = client.get("/v1/context", headers=headers, params={"intent": "trade", "asset": "XRP", "size": 10000})
+
+    assert halted.status_code == 409
+    assert halted.json()["decision_status"] == "HALT"
+    assert halted.json()["post_halt_quarantine_expiry"] is not None
+    assert quarantined.status_code == 409
+    assert quarantined.json()["decision_status"] == "HALT"
+    assert quarantined.json()["cooldown_state"]["reason"] == "halt_quarantine_active"
