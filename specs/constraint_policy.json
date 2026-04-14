@@ -1,0 +1,16 @@
+{
+  "name": "constraint_policy",
+  "version": "1.0",
+  "policy_model": "denial_first",
+  "repository_role": "interpretation_boundary_and_integration_surface",
+  "misuse_prevention": {
+    "forbid_trading_classification": true,
+    "forbid_signal_engine_classification": true,
+    "forbid_execution_engine_classification": true
+  },
+  "downstream_requirements": [
+    "submit decisions through the API",
+    "bind to decision_status",
+    "enforce refusal states"
+  ]
+}

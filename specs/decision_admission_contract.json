@@ -1,0 +1,27 @@
+{
+  "name": "decision_admission_contract",
+  "version": "1.0",
+  "interface_type": "response_contract",
+  "authoritative_endpoint": "/v1/context",
+  "required_fields": [
+    "decision_status",
+    "decision_context",
+    "constraint_analysis",
+    "impact_on_outcomes",
+    "adjustment",
+    "signature"
+  ],
+  "decision_status_values": [
+    "ALLOW",
+    "CONSTRAIN",
+    "VETO",
+    "DELAY",
+    "DENY",
+    "HALT",
+    "RETRY_DELAYED",
+    "RETRY_BLOCKED",
+    "PRESSURE_ESCALATED",
+    "REDUCE"
+  ],
+  "integration_rule": "downstream systems must bind behavior to decision_status and returned constraints"
+}

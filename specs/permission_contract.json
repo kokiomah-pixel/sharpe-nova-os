@@ -1,0 +1,13 @@
+{
+  "name": "permission_contract",
+  "version": "1.0",
+  "contract_scope": "pre_execution_permissioning",
+  "admission_outcomes": {
+    "allow": "decision may proceed",
+    "constrain": "decision may proceed only under returned limits",
+    "delay": "decision must wait for admissibility conditions",
+    "deny": "decision must not proceed",
+    "halt": "decision flow must pause pending restored integrity"
+  },
+  "control_obligation": "integrators must treat refusal states as binding and non-advisory"
+}

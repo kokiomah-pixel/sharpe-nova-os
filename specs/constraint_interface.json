@@ -1,0 +1,17 @@
+{
+  "name": "constraint_interface",
+  "version": "1.0",
+  "interface_type": "control_surface",
+  "core_domains": [
+    "telemetry",
+    "reflex_memory",
+    "constraint_logic"
+  ],
+  "constraint_fields": [
+    "constraint_analysis",
+    "constraint_trace",
+    "impact_on_outcomes",
+    "adjustment"
+  ],
+  "interpretation_rule": "constraints describe how capital must be conditioned before execution"
+}

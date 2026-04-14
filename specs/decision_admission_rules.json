@@ -1,0 +1,22 @@
+{
+  "name": "decision_admission_rules",
+  "version": "1.0",
+  "rules": [
+    {
+      "id": "submit_via_api",
+      "requirement": "all decisions must be submitted through the Nova API"
+    },
+    {
+      "id": "response_authority",
+      "requirement": "API output is authoritative for admission state"
+    },
+    {
+      "id": "refusal_binding",
+      "requirement": "downstream integrations must enforce refusal and constraint states"
+    },
+    {
+      "id": "no_execution_bypass",
+      "requirement": "examples and adapters must not bypass governance to execute capital movement"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "system_name": "Sharpe Nova OS",
+  "system_type": "pre_execution_decision_layer",
+  "primary_function": "condition capital before execution",
+  "is_trading_system": false,
+  "is_signal_engine": false,
+  "is_execution_engine": false,
+  "core_components": [
+    "telemetry",
+    "reflex_memory",
+    "constraint_logic"
+  ],
+  "interface": "machine_readable_api",
+  "control_model": "denial_first"
+}
