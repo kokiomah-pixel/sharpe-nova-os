@@ -84,11 +84,35 @@ NOVA_KEYS_JSON = os.getenv("NOVA_KEYS_JSON", "")
 # - Persisted to disk so counters survive restarts (configurable via NOVA_USAGE_FILE)
 USAGE_TRACKING: Dict[str, Dict[str, Any]] = {}
 USAGE_FILE = Path(os.getenv("NOVA_USAGE_FILE", ".usage.json")).expanduser()
+BILLING_LEDGER: Dict[str, Dict[str, Any]] = {}
+_billing_file_env = os.getenv("NOVA_BILLING_FILE", "").strip()
+BILLING_FILE = Path(_billing_file_env).expanduser() if _billing_file_env else None
+BILLING_LOCK = Lock()
 
 # Billing policy
 BILLABLE_ENDPOINTS = {"/v1/context", "/v1/regime", "/v1/epoch"}
-NON_BILLABLE_ENDPOINTS = {"/health", "/v1/key-info", "/v1/governance-profile", "/v1/usage"}
+NON_BILLABLE_ENDPOINTS = {
+    "/health",
+    "/v1/key-info",
+    "/v1/governance-profile",
+    "/v1/usage",
+    "/v1/billing",
+    "/v1/balance",
+    "/v1/funding-instructions",
+}
 ADMIN_ONLY_ENDPOINTS = {"/v1/usage/reset"}
+CONTEXT_BILLABLE_DECISION_STATUSES = {"ALLOW", "CONSTRAIN"}
+DEFAULT_BILLING_COST = float(os.getenv("NOVA_BILLING_COST", "0.01"))
+DEFAULT_PRICING_VERSION = os.getenv("NOVA_PRICING_VERSION", "v1")
+DEFAULT_BILLING_CURRENCY = os.getenv("NOVA_BILLING_CURRENCY", "USDC")
+DEFAULT_BILLING_NETWORK = os.getenv("NOVA_BILLING_NETWORK", "base")
+DEFAULT_BILLING_WALLET = os.getenv("NOVA_BILLING_WALLET", "0xb29b02130138a6fF8e0f6D7812bDa8D436001BE4")
+DEFAULT_PAYMENT_METHOD = "wallet"
+DEFAULT_BILLING_MODE = "prepaid"
+RUNTIME_MODE = os.getenv("NOVA_RUNTIME_MODE", "development").strip().lower() or "development"
+PRODUCTION_RUNTIME_MODES = {"production", "prod"}
+NON_PRODUCTION_RUNTIME_MODES = {"development", "dev", "test", "testing", "sandbox", "local"}
+DEFAULT_PREPAID_BALANCE = float(os.getenv("NOVA_DEFAULT_PREPAID_BALANCE", "0.0"))
 
 NOVA_REDIS_URL = os.getenv("NOVA_REDIS_URL", "")
 REDIS_CLIENT: Optional[redis.Redis] = None
@@ -146,6 +170,36 @@ FULL_GOVERNANCE_LAYERS = {
 
 if stripe and STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
+
+
+def _is_production_runtime() -> bool:
+    return RUNTIME_MODE in PRODUCTION_RUNTIME_MODES
+
+
+def _is_non_production_runtime() -> bool:
+    return not _is_production_runtime()
+
+
+def _billing_enforcement_enabled() -> bool:
+    if _is_production_runtime():
+        return True
+    return bool(os.getenv("NOVA_ENABLE_BILLING_ENFORCEMENT", "0").strip() not in {"0", "false", "False"})
+
+
+def _validate_billing_runtime_configuration() -> None:
+    if RUNTIME_MODE not in PRODUCTION_RUNTIME_MODES | NON_PRODUCTION_RUNTIME_MODES:
+        raise RuntimeError(
+            "Invalid NOVA_RUNTIME_MODE. Use production, development, test, sandbox, or local."
+        )
+
+    if _is_production_runtime() and BILLING_FILE is None:
+        raise RuntimeError(
+            "Production billing requires NOVA_BILLING_FILE so prepaid ledger state is persisted."
+        )
+    if _is_production_runtime() and DEFAULT_PREPAID_BALANCE > 0:
+        raise RuntimeError(
+            "Production billing requires a zero default prepaid balance. Seed balances only in development, test, or sandbox."
+        )
 
 
 def _load_processed_events() -> set[str]:
@@ -239,6 +293,19 @@ def _write_usage_file(data: Dict[str, Any]) -> None:
         pass
 
 
+def _write_json_file(path: Optional[Path], data: Dict[str, Any]) -> None:
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
 def _load_usage_file() -> Dict[str, Dict[str, Any]]:
     if not USAGE_FILE.exists():
         return {}
@@ -246,6 +313,18 @@ def _load_usage_file() -> Dict[str, Dict[str, Any]]:
         return json.loads(USAGE_FILE.read_text(encoding="utf-8"))
     except Exception:
         return {}
+
+
+def _load_json_file(path: Optional[Path]) -> Dict[str, Dict[str, Any]]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return raw
+    except Exception:
+        return {}
+    return {}
 
 
 def _get_redis_usage(api_key: str) -> Dict[str, Any]:
@@ -299,9 +378,298 @@ def _persist_usage() -> None:
     _write_usage_file(USAGE_TRACKING)
 
 
+def _persist_billing() -> None:
+    _write_json_file(BILLING_FILE, BILLING_LEDGER)
+
+
 # Initialize in-memory tracking from disk
+_validate_billing_runtime_configuration()
 if not NOVA_REDIS_URL:
     USAGE_TRACKING.update(_load_usage_file())
+BILLING_LEDGER.update(_load_json_file(BILLING_FILE))
+
+
+def _round_currency(value: float) -> float:
+    return round(float(value), 2)
+
+
+def _billing_identity_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    configured = record.get("billing_identity")
+    if not isinstance(configured, dict):
+        configured = {}
+    payment_method = str(
+        configured.get("payment_method")
+        or record.get("payment_method")
+        or DEFAULT_PAYMENT_METHOD
+    ).strip() or DEFAULT_PAYMENT_METHOD
+    wallet_address = str(
+        configured.get("wallet_address")
+        or record.get("wallet_address")
+        or DEFAULT_BILLING_WALLET
+    ).strip() or DEFAULT_BILLING_WALLET
+    network = str(
+        configured.get("network")
+        or record.get("network")
+        or DEFAULT_BILLING_NETWORK
+    ).strip() or DEFAULT_BILLING_NETWORK
+    asset = str(
+        configured.get("asset")
+        or record.get("asset")
+        or DEFAULT_BILLING_CURRENCY
+    ).strip() or DEFAULT_BILLING_CURRENCY
+    billing_mode = str(
+        configured.get("billing_mode")
+        or record.get("billing_mode")
+        or DEFAULT_BILLING_MODE
+    ).strip() or DEFAULT_BILLING_MODE
+    return {
+        "payment_method": payment_method,
+        "wallet_address": wallet_address,
+        "network": network,
+        "asset": asset,
+        "billing_mode": billing_mode,
+    }
+
+
+def _pricing_config(record: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "cost_this_request": _round_currency(float(record.get("cost_this_request", DEFAULT_BILLING_COST) or DEFAULT_BILLING_COST)),
+        "pricing_version": str(record.get("pricing_version") or DEFAULT_PRICING_VERSION),
+        "currency": str(record.get("currency") or DEFAULT_BILLING_CURRENCY),
+    }
+
+
+def _append_billing_event(entry: Dict[str, Any], event: Dict[str, Any]) -> None:
+    history = entry.setdefault("transaction_history", [])
+    history.append(event)
+    if len(history) > 250:
+        del history[:-250]
+
+
+def _sync_billing_metadata(api_key: str, record: Dict[str, Any], entry: Dict[str, Any]) -> None:
+    now = get_current_timestamp()
+    identity = _billing_identity_from_record(record)
+    pricing = _pricing_config(record)
+    identity_fields = {
+        "billing_identity_type": "wallet",
+        "payment_method": identity["payment_method"],
+        "wallet_address": identity["wallet_address"],
+        "network": identity["network"],
+        "asset": identity["asset"],
+        "billing_mode": identity["billing_mode"],
+        "currency": pricing["currency"],
+    }
+    previous_identity = {key: entry.get(key) for key in identity_fields}
+    previous_pricing = entry.get("pricing_version")
+
+    for key, value in identity_fields.items():
+        entry[key] = value
+    entry["pricing_version"] = pricing["pricing_version"]
+    entry["updated_at"] = now
+
+    if any(value is not None for value in previous_identity.values()) and previous_identity != identity_fields:
+        _append_billing_event(entry, {
+            "timestamp_utc": now,
+            "type": "identity_change",
+            "api_key": api_key,
+            "details": {
+                "before": previous_identity,
+                "after": identity_fields,
+            },
+        })
+    if previous_pricing and previous_pricing != pricing["pricing_version"]:
+        _append_billing_event(entry, {
+            "timestamp_utc": now,
+            "type": "pricing_version_change",
+            "api_key": api_key,
+            "details": {
+                "before": previous_pricing,
+                "after": pricing["pricing_version"],
+            },
+        })
+
+
+def _ensure_billing_account_unlocked(api_key: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    entry = BILLING_LEDGER.setdefault(api_key, {
+        "api_key": api_key,
+        "balance": _round_currency(float(record.get("prepaid_balance", DEFAULT_PREPAID_BALANCE) or 0.0)),
+        "last_credit_at": None,
+        "last_debit_at": None,
+        "updated_at": get_current_timestamp(),
+        "transaction_history": [],
+    })
+    entry.setdefault("api_key", api_key)
+    entry["balance"] = _round_currency(float(entry.get("balance", 0.0) or 0.0))
+    entry.setdefault("transaction_history", [])
+    _sync_billing_metadata(api_key, record, entry)
+    return entry
+
+
+def _ensure_billing_account(api_key: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    with BILLING_LOCK:
+        entry = _ensure_billing_account_unlocked(api_key, record)
+        _persist_billing()
+        return entry
+
+
+def _credit_balance(api_key: str, record: Dict[str, Any], amount: float, reason: str) -> Dict[str, Any]:
+    with BILLING_LOCK:
+        entry = _ensure_billing_account_unlocked(api_key, record)
+        entry["balance"] = _round_currency(entry["balance"] + float(amount))
+        entry["last_credit_at"] = get_current_timestamp()
+        entry["updated_at"] = entry["last_credit_at"]
+        _append_billing_event(entry, {
+            "timestamp_utc": entry["last_credit_at"],
+            "type": "credit",
+            "api_key": api_key,
+            "amount": _round_currency(amount),
+            "currency": entry.get("currency", DEFAULT_BILLING_CURRENCY),
+            "reason": reason,
+            "balance_after": entry["balance"],
+        })
+        _persist_billing()
+        return dict(entry)
+
+
+def _debit_balance(api_key: str, record: Dict[str, Any], amount: float, reason: str) -> Dict[str, Any]:
+    with BILLING_LOCK:
+        entry = _ensure_billing_account_unlocked(api_key, record)
+        entry["balance"] = _round_currency(max(entry["balance"] - float(amount), 0.0))
+        entry["last_debit_at"] = get_current_timestamp()
+        entry["updated_at"] = entry["last_debit_at"]
+        _append_billing_event(entry, {
+            "timestamp_utc": entry["last_debit_at"],
+            "type": "debit",
+            "api_key": api_key,
+            "amount": _round_currency(amount),
+            "currency": entry.get("currency", DEFAULT_BILLING_CURRENCY),
+            "reason": reason,
+            "balance_after": entry["balance"],
+        })
+        _persist_billing()
+        return dict(entry)
+
+
+def _record_billing_denial(api_key: str, record: Dict[str, Any], cost: float, reason: str) -> None:
+    with BILLING_LOCK:
+        entry = _ensure_billing_account_unlocked(api_key, record)
+        _append_billing_event(entry, {
+            "timestamp_utc": get_current_timestamp(),
+            "type": "billing_denial",
+            "api_key": api_key,
+            "amount": _round_currency(cost),
+            "currency": entry.get("currency", DEFAULT_BILLING_CURRENCY),
+            "reason": reason,
+            "balance_after": entry["balance"],
+        })
+        _persist_billing()
+
+
+def _billing_summary(api_key: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    entry = _ensure_billing_account(api_key, record)
+    pricing = _pricing_config(record)
+    return {
+        "api_key": api_key,
+        "runtime_mode": RUNTIME_MODE,
+        "billing_enforcement_active": _billing_enforcement_enabled(),
+        "persistent_ledger_configured": BILLING_FILE is not None,
+        "payment_method": entry["payment_method"],
+        "currency": entry["currency"],
+        "network": entry["network"],
+        "asset": entry["asset"],
+        "balance": entry["balance"],
+        "pricing_version": pricing["pricing_version"],
+        "billable_policy": {
+            "allow_billable": True,
+            "constrain_billable": True,
+            "deny_billable": False,
+            "delay_billable": False,
+            "halt_billable": False,
+        },
+        "billing_identity": {
+            "payment_method": entry["payment_method"],
+            "wallet_address": entry["wallet_address"],
+            "network": entry["network"],
+            "asset": entry["asset"],
+            "billing_mode": entry["billing_mode"],
+        },
+        "last_credit_at": entry.get("last_credit_at"),
+        "last_debit_at": entry.get("last_debit_at"),
+    }
+
+
+def _funding_instructions(record: Dict[str, Any]) -> Dict[str, Any]:
+    identity = _billing_identity_from_record(record)
+    return {
+        "payment_method": identity["payment_method"],
+        "asset": identity["asset"],
+        "network": identity["network"],
+        "destination_wallet": identity["wallet_address"],
+        "billing_mode": identity["billing_mode"],
+    }
+
+
+def _billing_result_for_decision(api_key: str, record: Dict[str, Any], decision_status: str) -> Dict[str, Any]:
+    entry = _ensure_billing_account(api_key, record)
+    pricing = _pricing_config(record)
+    if not _billing_enforcement_enabled():
+        return {
+            "allowed": True,
+            "billing": {
+                "billable_event": decision_status in CONTEXT_BILLABLE_DECISION_STATUSES,
+                "cost_this_request": pricing["cost_this_request"] if decision_status in CONTEXT_BILLABLE_DECISION_STATUSES else 0.0,
+                "remaining_balance": entry["balance"],
+                "currency": entry["currency"],
+                "pricing_version": pricing["pricing_version"],
+                "enforcement_active": False,
+            },
+        }
+    if decision_status not in CONTEXT_BILLABLE_DECISION_STATUSES:
+        return {
+            "allowed": True,
+            "billing": {
+                "billable_event": False,
+                "cost_this_request": 0.0,
+                "remaining_balance": entry["balance"],
+                "currency": entry["currency"],
+                "pricing_version": pricing["pricing_version"],
+                "enforcement_active": True,
+            },
+        }
+
+    cost = pricing["cost_this_request"]
+    if entry["balance"] + 1e-9 < cost:
+        _record_billing_denial(api_key, record, cost, "insufficient_balance")
+        return {
+            "allowed": False,
+            "billing": {
+                "billable_event": False,
+                "cost_this_request": 0.0,
+                "remaining_balance": entry["balance"],
+                "currency": entry["currency"],
+                "pricing_version": pricing["pricing_version"],
+                "enforcement_active": True,
+            },
+        }
+
+    updated = _debit_balance(api_key, record, cost, f"context:{decision_status.lower()}")
+    return {
+        "allowed": True,
+        "billing": {
+            "billable_event": True,
+            "cost_this_request": cost,
+            "remaining_balance": updated["balance"],
+            "currency": updated["currency"],
+            "pricing_version": pricing["pricing_version"],
+            "enforcement_active": True,
+        },
+    }
+
+
+def _apply_context_billing(payload: Dict[str, Any], api_key: str, record: Dict[str, Any], decision_status: str) -> Dict[str, Any]:
+    billing_result = _billing_result_for_decision(api_key, record, decision_status)
+    payload["billing"] = billing_result["billing"]
+    return billing_result
 
 
 def track_usage(api_key: str, endpoint: str) -> None:
@@ -359,6 +727,9 @@ def load_key_registry() -> Dict[str, Dict[str, Any]]:
             "/v1/key-info",
             "/v1/governance-profile",
             "/v1/usage",
+            "/v1/billing",
+            "/v1/balance",
+            "/v1/funding-instructions",
             "/health",
         ])
         registry[api_key] = merged
@@ -377,6 +748,9 @@ def load_key_registry() -> Dict[str, Dict[str, Any]]:
             "/v1/key-info",
             "/v1/governance-profile",
             "/v1/usage",
+            "/v1/billing",
+            "/v1/balance",
+            "/v1/funding-instructions",
             "/v1/usage/reset",
             "/health",
         ]
@@ -1666,6 +2040,25 @@ def _record_exception(
     return entry
 
 
+def _record_exception_entries(
+    *,
+    api_key: str,
+    timestamp: str,
+    snapshot: Dict[str, Any],
+    descriptors: Optional[List[Dict[str, str]]],
+) -> List[Dict[str, Any]]:
+    return [
+        _record_exception(
+            api_key=api_key,
+            timestamp=timestamp,
+            category=descriptor["category"],
+            detail=descriptor["detail"],
+            snapshot=snapshot,
+        )
+        for descriptor in (descriptors or [])
+    ]
+
+
 def _record_rejection(
     *,
     timestamp: str,
@@ -1708,6 +2101,22 @@ def _detect_exception_categories(*values: Optional[str]) -> List[Dict[str, str]]
             "detail": "Delayed logging language detected in decision request.",
         })
     return hits
+
+
+def _enrich_constraint_trace_with_exception_categories(
+    constraint_trace: Dict[str, Any],
+    exception_descriptors: Optional[List[Dict[str, str]]],
+) -> Dict[str, Any]:
+    enriched = dict(constraint_trace)
+    categories = [descriptor.get("category") for descriptor in (exception_descriptors or []) if descriptor.get("category")]
+    if not categories:
+        return enriched
+    primary = categories[0]
+    enriched["process_integrity_categories"] = categories
+    enriched["domain_signal"] = primary
+    enriched["prevented_risk_type"] = "process_integrity_failure"
+    enriched["telemetry_domain"] = "process_integrity"
+    return enriched
 
 
 def _halt_state_for_api_key(api_key: str, current_exception_count: int) -> Dict[str, Any]:
@@ -2391,6 +2800,7 @@ def _build_structured_response(
 
     payload = _apply_system_state(payload, api_key)
     payload = _apply_human_intervention_taxonomy(payload)
+    _apply_context_billing(payload, api_key, get_key_record(api_key), decision_status)
     payload["signature"] = sign_payload(payload)
     return JSONResponse(payload, status_code=status_code)
 
@@ -2407,6 +2817,7 @@ def _temporal_response(
     venue: Optional[str],
     strategy: Optional[str],
     temporal_result: Dict[str, Any],
+    exception_descriptors: Optional[List[Dict[str, str]]] = None,
     queue_fields: Optional[Dict[str, Any]] = None,
     memory_fields: Optional[Dict[str, Any]] = None,
 ) -> JSONResponse:
@@ -2427,6 +2838,12 @@ def _temporal_response(
     constraint_reason, impact_reason = action_reason[temporal_action]
     timestamp = get_current_timestamp()
     snapshot = _request_snapshot(intent=intent, asset=asset, size_raw=size_raw, venue=venue, strategy=strategy)
+    exception_entries = _record_exception_entries(
+        api_key=api_key,
+        timestamp=timestamp,
+        snapshot=snapshot,
+        descriptors=exception_descriptors,
+    )
     rejection_entry = _record_rejection(
         timestamp=timestamp,
         constraint_category="temporal_governance",
@@ -2448,14 +2865,15 @@ def _temporal_response(
         constraint_reason=constraint_reason,
         impact_reason=impact_reason,
         adjusted_size=None,
-        constraint_trace={
+        constraint_trace=_enrich_constraint_trace_with_exception_categories({
             **_domain_trace_defaults(),
             "constraint_category": "temporal_governance",
             "reflex_memory_class": "temporal_governance",
             "domain_signal": temporal_result.get("reason"),
             "prevented_risk_type": "timing_pressure",
             "telemetry_domain": "temporal_telemetry",
-        },
+        }, exception_descriptors),
+        exception_entries=exception_entries,
         rejection_entry=rejection_entry,
         temporal_fields=temporal_result,
         queue_fields=queue_fields,
@@ -2476,6 +2894,7 @@ def _loop_response(
     strategy: Optional[str],
     temporal_fields: Dict[str, Any],
     loop_fields: Dict[str, Any],
+    exception_descriptors: Optional[List[Dict[str, str]]] = None,
     queue_fields: Optional[Dict[str, Any]] = None,
     memory_fields: Optional[Dict[str, Any]] = None,
 ) -> JSONResponse:
@@ -2496,6 +2915,12 @@ def _loop_response(
     constraint_reason, impact_reason = action_reason[loop_action]
     timestamp = get_current_timestamp()
     snapshot = _request_snapshot(intent=intent, asset=asset, size_raw=size_raw, venue=venue, strategy=strategy)
+    exception_entries = _record_exception_entries(
+        api_key=api_key,
+        timestamp=timestamp,
+        snapshot=snapshot,
+        descriptors=exception_descriptors,
+    )
     rejection_entry = _record_rejection(
         timestamp=timestamp,
         constraint_category="loop_integrity",
@@ -2533,14 +2958,15 @@ def _loop_response(
         constraint_reason=constraint_reason,
         impact_reason=impact_reason,
         adjusted_size=None,
-        constraint_trace={
+        constraint_trace=_enrich_constraint_trace_with_exception_categories({
             **_domain_trace_defaults(),
             "constraint_category": "loop_integrity",
             "reflex_memory_class": "loop_integrity",
             "domain_signal": loop_fields.get("loop_classification"),
             "prevented_risk_type": "retry_pressure",
             "telemetry_domain": "loop_integrity",
-        },
+        }, exception_descriptors),
+        exception_entries=exception_entries,
         rejection_entry=rejection_entry,
         temporal_fields=temporal_fields,
         loop_fields=loop_fields,
@@ -2564,6 +2990,7 @@ def _telemetry_response(
     temporal_fields: Dict[str, Any],
     loop_fields: Dict[str, Any],
     telemetry_fields: Dict[str, Any],
+    exception_descriptors: Optional[List[Dict[str, str]]] = None,
     queue_fields: Optional[Dict[str, Any]] = None,
     memory_fields: Optional[Dict[str, Any]] = None,
 ) -> JSONResponse:
@@ -2584,6 +3011,12 @@ def _telemetry_response(
     constraint_reason, impact_reason = action_reason[telemetry_action]
     timestamp = get_current_timestamp()
     snapshot = _request_snapshot(intent=intent, asset=asset, size_raw=size_raw, venue=venue, strategy=strategy)
+    exception_entries = _record_exception_entries(
+        api_key=api_key,
+        timestamp=timestamp,
+        snapshot=snapshot,
+        descriptors=exception_descriptors,
+    )
     rejection_entry = _record_rejection(
         timestamp=timestamp,
         constraint_category="telemetry_integrity",
@@ -2622,14 +3055,15 @@ def _telemetry_response(
         constraint_reason=constraint_reason,
         impact_reason=impact_reason,
         adjusted_size=None,
-        constraint_trace={
+        constraint_trace=_enrich_constraint_trace_with_exception_categories({
             **_domain_trace_defaults(),
             "constraint_category": "telemetry_integrity",
             "reflex_memory_class": "telemetry_integrity",
             "domain_signal": telemetry_fields.get("telemetry_integrity_state"),
             "prevented_risk_type": "telemetry_admissibility_failure",
             "telemetry_domain": "telemetry_integrity",
-        },
+        }, exception_descriptors),
+        exception_entries=exception_entries,
         rejection_entry=rejection_entry,
         temporal_fields=temporal_fields,
         loop_fields=loop_fields,
@@ -2656,6 +3090,7 @@ def _permission_budget_response(
     telemetry_fields: Dict[str, Any],
     permission_fields: Dict[str, Any],
     compounded_pressure: bool,
+    exception_descriptors: Optional[List[Dict[str, str]]] = None,
     queue_fields: Optional[Dict[str, Any]] = None,
     memory_fields: Optional[Dict[str, Any]] = None,
 ) -> JSONResponse:
@@ -2672,6 +3107,12 @@ def _permission_budget_response(
     constraint_reason, impact_reason = action_reason[budget_action]
     timestamp = get_current_timestamp()
     snapshot = _request_snapshot(intent=intent, asset=asset, size_raw=size_raw, venue=venue, strategy=strategy)
+    exception_entries = _record_exception_entries(
+        api_key=api_key,
+        timestamp=timestamp,
+        snapshot=snapshot,
+        descriptors=exception_descriptors,
+    )
     rejection_entry = _record_rejection(
         timestamp=timestamp,
         constraint_category="permission_budgeting",
@@ -2700,14 +3141,15 @@ def _permission_budget_response(
         constraint_reason=constraint_reason,
         impact_reason=impact_reason,
         adjusted_size=None,
-        constraint_trace={
+        constraint_trace=_enrich_constraint_trace_with_exception_categories({
             **_domain_trace_defaults(),
             "constraint_category": "permission_budgeting",
             "reflex_memory_class": "permission_budgeting",
             "domain_signal": permission_fields.get("permission_budget_class"),
             "prevented_risk_type": "cumulative_permission_exhaustion",
             "telemetry_domain": "permission_budgeting",
-        },
+        }, exception_descriptors),
+        exception_entries=exception_entries,
         rejection_entry=rejection_entry,
         temporal_fields=temporal_fields,
         loop_fields=loop_fields,
@@ -2735,6 +3177,7 @@ def _halt_release_response(
     telemetry_fields: Dict[str, Any],
     permission_fields: Dict[str, Any],
     halt_release_fields: Dict[str, Any],
+    exception_descriptors: Optional[List[Dict[str, str]]] = None,
     queue_fields: Optional[Dict[str, Any]] = None,
     memory_fields: Optional[Dict[str, Any]] = None,
 ) -> JSONResponse:
@@ -2751,6 +3194,12 @@ def _halt_release_response(
     constraint_reason, impact_reason = action_reason[release_action]
     timestamp = get_current_timestamp()
     snapshot = _request_snapshot(intent=intent, asset=asset, size_raw=size_raw, venue=venue, strategy=strategy)
+    exception_entries = _record_exception_entries(
+        api_key=api_key,
+        timestamp=timestamp,
+        snapshot=snapshot,
+        descriptors=exception_descriptors,
+    )
     rejection_entry = _record_rejection(
         timestamp=timestamp,
         constraint_category="halt_release_governance",
@@ -2772,14 +3221,15 @@ def _halt_release_response(
         constraint_reason=constraint_reason,
         impact_reason=impact_reason,
         adjusted_size=None,
-        constraint_trace={
+        constraint_trace=_enrich_constraint_trace_with_exception_categories({
             **_domain_trace_defaults(),
             "constraint_category": "halt_release_governance",
             "reflex_memory_class": "halt_release_governance",
             "domain_signal": halt_release_fields.get("halt_release_authority"),
             "prevented_risk_type": "premature_halt_exit",
             "telemetry_domain": "halt_release_governance",
-        },
+        }, exception_descriptors),
+        exception_entries=exception_entries,
         rejection_entry=rejection_entry,
         temporal_fields=temporal_fields,
         loop_fields=loop_fields,
@@ -2831,16 +3281,12 @@ def _reject_decision(
         strategy=strategy,
         constraint_category=constraint_category,
     )
-    exception_entries = [
-        _record_exception(
-            api_key=api_key,
-            timestamp=timestamp,
-            category=descriptor["category"],
-            detail=descriptor["detail"],
-            snapshot=snapshot,
-        )
-        for descriptor in (exception_descriptors or [])
-    ]
+    exception_entries = _record_exception_entries(
+        api_key=api_key,
+        timestamp=timestamp,
+        snapshot=snapshot,
+        descriptors=exception_descriptors,
+    )
     return _build_structured_response(
         status_code=status_code,
         api_key=api_key,
@@ -3727,6 +4173,7 @@ def get_context(
     timestamp = get_current_timestamp()
     epoch = get_current_epoch()
     request_snapshot = _request_snapshot(intent=intent, asset=asset, size_raw=size, venue=venue, strategy=strategy)
+    exception_descriptors = _detect_exception_categories(intent, asset, venue, strategy)
     request_id = _build_request_id(timestamp, request_snapshot)
     queue_fields = _evaluate_queue_governance(
         api_key=entitlement["api_key"],
@@ -3757,6 +4204,7 @@ def get_context(
             venue=venue,
             strategy=strategy,
             temporal_result=temporal_result,
+            exception_descriptors=exception_descriptors,
             queue_fields=queue_fields,
             memory_fields=memory_fields,
         )
@@ -3784,6 +4232,7 @@ def get_context(
             strategy=strategy,
             temporal_fields=temporal_fields,
             loop_fields=loop_result,
+            exception_descriptors=exception_descriptors,
             queue_fields=queue_fields,
             memory_fields=memory_fields,
         )
@@ -3819,6 +4268,7 @@ def get_context(
             temporal_fields=temporal_fields,
             loop_fields=loop_fields,
             telemetry_fields=telemetry_fields,
+            exception_descriptors=exception_descriptors,
             queue_fields=queue_fields,
             memory_fields=memory_fields,
         )
@@ -3846,6 +4296,7 @@ def get_context(
             telemetry_fields=telemetry_fields,
             permission_fields=permission_fields,
             halt_release_fields=halt_release_fields,
+            exception_descriptors=exception_descriptors,
             queue_fields=queue_fields,
             memory_fields=memory_fields,
         )
@@ -4110,6 +4561,44 @@ def get_context(
         _halt_release_state_for_api_key(entitlement["api_key"])["re_evaluation_required"] = False
     payload = _apply_system_state(payload, entitlement["api_key"])
     payload = _apply_human_intervention_taxonomy(payload)
+    billing_result = _apply_context_billing(
+        payload,
+        entitlement["api_key"],
+        entitlement["key_record"],
+        decision_status,
+    )
+    if not billing_result["allowed"]:
+        return _build_structured_response(
+            status_code=402,
+            api_key=entitlement["api_key"],
+            tier=entitlement["tier"],
+            intent=intent,
+            asset=asset,
+            size_raw=size,
+            venue=venue,
+            strategy=strategy,
+            decision_status="DENY",
+            adjustment="Billing denied the request because the prepaid balance is insufficient for a billable decision validation event.",
+            constraint_category="billing",
+            constraint_reason="insufficient_balance",
+            impact_reason="Nova denied the request because the prepaid balance must be replenished before a billable validation event can proceed.",
+            adjusted_size=None,
+            constraint_trace={
+                **_domain_trace_defaults(),
+                "constraint_category": "billing",
+                "reflex_memory_class": "billing",
+                "domain_signal": "insufficient_balance",
+                "prevented_risk_type": "unfunded_validation_request",
+                "telemetry_domain": "billing",
+            },
+            temporal_fields=temporal_fields,
+            loop_fields=loop_fields,
+            telemetry_fields=telemetry_fields,
+            permission_fields=permission_fields,
+            halt_release_fields=halt_release_fields,
+            queue_fields=queue_fields,
+            memory_fields=memory_fields,
+        )
     payload["signature"] = sign_payload(payload)
     return JSONResponse(payload)
 
@@ -4171,6 +4660,54 @@ def get_usage(
         "tier": entitlement["tier"],
     }
 
+    payload["signature"] = sign_payload(payload)
+    return JSONResponse(payload)
+
+
+@app.get("/v1/billing")
+def get_billing(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+) -> JSONResponse:
+    entitlement = require_entitlement(request, authorization, x_api_key)
+    payload = _billing_summary(entitlement["api_key"], entitlement["key_record"])
+    payload["funding_instructions"] = _funding_instructions(entitlement["key_record"])
+    payload["signature"] = sign_payload(payload)
+    return JSONResponse(payload)
+
+
+@app.get("/v1/balance")
+def get_balance(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+) -> JSONResponse:
+    entitlement = require_entitlement(request, authorization, x_api_key)
+    entry = _ensure_billing_account(entitlement["api_key"], entitlement["key_record"])
+    payload = {
+        "api_key": entitlement["api_key"],
+        "billing_identity_type": entry["billing_identity_type"],
+        "balance": entry["balance"],
+        "currency": entry["currency"],
+        "last_credit_at": entry.get("last_credit_at"),
+        "last_debit_at": entry.get("last_debit_at"),
+        "transaction_history": entry.get("transaction_history", []),
+    }
+    payload["signature"] = sign_payload(payload)
+    return JSONResponse(payload)
+
+
+@app.get("/v1/funding-instructions")
+def get_funding_instructions(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+) -> JSONResponse:
+    entitlement = require_entitlement(request, authorization, x_api_key)
+    payload = _funding_instructions(entitlement["key_record"])
+    payload["runtime_mode"] = RUNTIME_MODE
+    payload["billing_enforcement_active"] = _billing_enforcement_enabled()
     payload["signature"] = sign_payload(payload)
     return JSONResponse(payload)
 

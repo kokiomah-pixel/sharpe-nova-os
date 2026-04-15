@@ -687,6 +687,40 @@ def test_bypass_attempt_creates_exception_register_entry(client):
     assert payload["intervention_reason"] == "process_integrity_violation"
 
 
+def test_bypass_attempt_still_surfaces_exception_metadata_when_temporal_governance_blocks_first(client):
+    headers = {"Authorization": "Bearer temporal-key"}
+
+    seed = client.get(
+        "/v1/context",
+        headers=headers,
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+    assert seed.status_code == 200
+
+    response = client.get(
+        "/v1/context",
+        headers=headers,
+        params={
+            "intent": "trade",
+            "asset": "ETH",
+            "size": 10000,
+            "strategy": "skip validation just execute route directly",
+        },
+    )
+
+    assert response.status_code == 429
+    payload = response.json()
+    assert payload["decision_status"] == "RETRY_DELAYED" or payload["decision_status"] == "DELAY"
+    assert payload["exception_register"]
+    categories = {entry["category"] for entry in payload["exception_register"]}
+    assert "bypass_attempt" in categories
+    assert payload["constraint_trace"]["domain_signal"] == "bypass_attempt"
+    assert "bypass_attempt" in payload["constraint_trace"]["process_integrity_categories"]
+    assert payload["human_intervention_type"] == "exception_authorization_required"
+    assert payload["authorization_scope"] == "process_integrity_exception_authorization"
+    assert payload["intervention_reason"] == "process_integrity_violation"
+
+
 def test_compound_integrity_failures_raise_halt_recommendation(client):
     headers = {"Authorization": "Bearer admin-key"}
     client.get(
@@ -1033,3 +1067,282 @@ def test_same_family_retry_after_telemetry_deny_surfaces_loop_fields(client, mon
     assert payload["pressure_score"] > 0
     assert payload["loop_integrity_state"] == "retry_delayed"
     assert payload["telemetry_integrity_state"] == "not_evaluated"
+
+
+def test_context_billing_object_debits_allow_and_constrain_only(client):
+    app_module = importlib.import_module("app")
+    headers = {"Authorization": "Bearer admin-key"}
+
+    with patch.dict(
+        os.environ,
+        {
+            "NOVA_KEYS_JSON": json.dumps(TEST_KEYS),
+            "NOVA_USAGE_FILE": ".usage.billing-explicit.test.json",
+            "NOVA_RUNTIME_MODE": "test",
+            "NOVA_ENABLE_BILLING_ENFORCEMENT": "1",
+            "NOVA_DEFAULT_PREPAID_BALANCE": "1000.0",
+        },
+        clear=False,
+    ):
+        sys.modules.pop("app", None)
+        app_module = importlib.import_module("app")
+        test_client = TestClient(app_module.app)
+
+        allow_response = test_client.get(
+            "/v1/context",
+            headers=headers,
+            params={"intent": "reduce_position", "asset": "ETH", "size": 1000},
+        )
+        assert allow_response.status_code == 200
+        allow_payload = allow_response.json()
+        assert allow_payload["decision_status"] == "ALLOW"
+        assert allow_payload["billing"]["billable_event"] is True
+        assert allow_payload["billing"]["cost_this_request"] == 0.01
+        assert allow_payload["billing"]["remaining_balance"] == 999.99
+        assert allow_payload["billing"]["currency"] == "USDC"
+        assert allow_payload["billing"]["pricing_version"] == "v1"
+        assert allow_payload["billing"]["enforcement_active"] is True
+
+        veto_response = test_client.get(
+            "/v1/context",
+            headers=headers,
+            params={"intent": "trade", "asset": "ETH", "size": 1000000},
+        )
+        assert veto_response.status_code == 200
+        veto_payload = veto_response.json()
+        assert veto_payload["decision_status"] == "VETO"
+        assert veto_payload["billing"]["billable_event"] is False
+        assert veto_payload["billing"]["cost_this_request"] == 0.0
+        assert veto_payload["billing"]["remaining_balance"] == 999.99
+
+    try:
+        os.remove(".usage.billing-explicit.test.json")
+    except FileNotFoundError:
+        pass
+
+
+def test_context_billing_denies_when_balance_is_insufficient():
+    app_module = importlib.import_module("app")
+    keys = {
+        "billing-key": {
+            "owner": "billing-user",
+            "tier": "pro",
+            "status": "active",
+            "monthly_quota": 100,
+            "prepaid_balance": 0.0,
+            "allowed_endpoints": [
+                "/v1/context",
+                "/v1/usage",
+                "/v1/billing",
+                "/v1/balance",
+                "/v1/funding-instructions",
+            ],
+        }
+    }
+
+    with patch.dict(
+        os.environ,
+        {
+            "NOVA_KEYS_JSON": json.dumps(keys),
+            "NOVA_USAGE_FILE": ".usage.billing-enforcement.test.json",
+            "NOVA_RUNTIME_MODE": "test",
+            "NOVA_ENABLE_BILLING_ENFORCEMENT": "1",
+            "NOVA_DEFAULT_PREPAID_BALANCE": "0.0",
+        },
+        clear=False,
+    ):
+        sys.modules.pop("app", None)
+        app_module = importlib.import_module("app")
+        test_client = TestClient(app_module.app)
+
+        response = test_client.get(
+            "/v1/context",
+            headers={"Authorization": "Bearer billing-key"},
+            params={"intent": "reduce_position", "asset": "ETH", "size": 1000},
+        )
+
+        assert response.status_code == 402
+        payload = response.json()
+        assert payload["decision_status"] == "DENY"
+        assert payload["constraint_analysis"]["constraint_category"] == "billing"
+        assert payload["constraint_analysis"]["why_this_happened"] == "insufficient_balance"
+        assert payload["billing"]["billable_event"] is False
+        assert payload["billing"]["remaining_balance"] == 0.0
+        assert payload["billing"]["currency"] == "USDC"
+
+        balance = test_client.get("/v1/balance", headers={"Authorization": "Bearer billing-key"})
+        assert balance.status_code == 200
+        balance_payload = balance.json()
+        assert balance_payload["balance"] == 0.0
+        assert any(item["type"] == "billing_denial" for item in balance_payload["transaction_history"])
+
+    try:
+        os.remove(".usage.billing-enforcement.test.json")
+    except FileNotFoundError:
+        pass
+
+
+def test_billing_and_balance_endpoints_surface_wallet_first_metadata():
+    keys = {
+        "wallet-key": {
+            "owner": "wallet-user",
+            "tier": "pro",
+            "status": "active",
+            "monthly_quota": 100,
+            "prepaid_balance": 25.0,
+            "allowed_endpoints": [
+                "/v1/context",
+                "/v1/usage",
+                "/v1/billing",
+                "/v1/balance",
+                "/v1/funding-instructions",
+            ],
+        }
+    }
+
+    with patch.dict(
+        os.environ,
+        {
+            "NOVA_KEYS_JSON": json.dumps(keys),
+            "NOVA_USAGE_FILE": ".usage.billing-read.test.json",
+            "NOVA_RUNTIME_MODE": "test",
+        },
+        clear=False,
+    ):
+        sys.modules.pop("app", None)
+        app_module = importlib.import_module("app")
+        test_client = TestClient(app_module.app)
+
+        billing = test_client.get("/v1/billing", headers={"Authorization": "Bearer wallet-key"})
+        assert billing.status_code == 200
+        billing_payload = billing.json()
+        assert billing_payload["payment_method"] == "wallet"
+        assert billing_payload["currency"] == "USDC"
+        assert billing_payload["network"] == "base"
+        assert billing_payload["balance"] == 25.0
+        assert billing_payload["pricing_version"] == "v1"
+        assert billing_payload["runtime_mode"] == "test"
+        assert billing_payload["billing_enforcement_active"] is False
+        assert billing_payload["persistent_ledger_configured"] is False
+        assert billing_payload["billable_policy"]["allow_billable"] is True
+        assert billing_payload["billable_policy"]["deny_billable"] is False
+        assert billing_payload["funding_instructions"]["destination_wallet"] == "0xb29b02130138a6fF8e0f6D7812bDa8D436001BE4"
+
+        balance = test_client.get("/v1/balance", headers={"Authorization": "Bearer wallet-key"})
+        assert balance.status_code == 200
+        balance_payload = balance.json()
+        assert balance_payload["billing_identity_type"] == "wallet"
+        assert balance_payload["balance"] == 25.0
+        assert balance_payload["currency"] == "USDC"
+        assert balance_payload["transaction_history"] == []
+
+        funding = test_client.get("/v1/funding-instructions", headers={"Authorization": "Bearer wallet-key"})
+        assert funding.status_code == 200
+        funding_payload = funding.json()
+        assert funding_payload["destination_wallet"] == "0xb29b02130138a6fF8e0f6D7812bDa8D436001BE4"
+        assert funding_payload["asset"] == "USDC"
+        assert funding_payload["network"] == "base"
+        assert funding_payload["billing_mode"] == "prepaid"
+        assert funding_payload["billing_enforcement_active"] is False
+
+    try:
+        os.remove(".usage.billing-read.test.json")
+    except FileNotFoundError:
+        pass
+
+
+def test_production_runtime_requires_persistent_billing_store():
+    with patch.dict(
+        os.environ,
+        {
+            "NOVA_KEYS_JSON": json.dumps(TEST_KEYS),
+            "NOVA_RUNTIME_MODE": "production",
+            "NOVA_BILLING_FILE": "",
+        },
+        clear=False,
+    ):
+        sys.modules.pop("app", None)
+        with pytest.raises(RuntimeError, match="NOVA_BILLING_FILE"):
+            importlib.import_module("app")
+
+
+def test_production_runtime_rejects_positive_default_prepaid_balance(tmp_path):
+    billing_path = tmp_path / "billing.json"
+    with patch.dict(
+        os.environ,
+        {
+            "NOVA_KEYS_JSON": json.dumps(TEST_KEYS),
+            "NOVA_RUNTIME_MODE": "production",
+            "NOVA_BILLING_FILE": str(billing_path),
+            "NOVA_DEFAULT_PREPAID_BALANCE": "1.0",
+        },
+        clear=False,
+    ):
+        sys.modules.pop("app", None)
+        with pytest.raises(RuntimeError, match="zero default prepaid balance"):
+            importlib.import_module("app")
+
+
+def test_governance_ordering_is_unchanged_when_billing_balance_is_zero():
+    keys = {
+        "ordering-key": {
+            "owner": "ordering-user",
+            "tier": "pro",
+            "status": "active",
+            "monthly_quota": 100,
+            "prepaid_balance": 0.0,
+            "allowed_endpoints": [
+                "/v1/context",
+                "/v1/usage",
+                "/v1/billing",
+                "/v1/balance",
+            ],
+            "telemetry_integrity": {
+                "stale_after_seconds": 300,
+                "default_min_reliability": 0.7,
+                "risk_increasing_min_reliability": 0.8,
+                "risk_reducing_min_reliability": 0.6,
+                "disagreement_threshold": 0.35,
+                "halt_disagreement_threshold": 0.7,
+                "halt_on_degraded": True,
+            },
+        }
+    }
+
+    with patch.dict(
+        os.environ,
+        {
+            "NOVA_KEYS_JSON": json.dumps(keys),
+            "NOVA_USAGE_FILE": ".usage.billing-ordering.test.json",
+            "NOVA_RUNTIME_MODE": "test",
+            "NOVA_ENABLE_BILLING_ENFORCEMENT": "1",
+        },
+        clear=False,
+    ):
+        sys.modules.pop("app", None)
+        app_module = importlib.import_module("app")
+        test_client = TestClient(app_module.app)
+
+        response = test_client.get(
+            "/v1/context",
+            headers={"Authorization": "Bearer ordering-key"},
+            params={
+                "intent": "trade",
+                "asset": "ETH",
+                "size": 10000,
+                "telemetry_age_seconds": 1200,
+                "telemetry_reliability": 0.95,
+            },
+        )
+
+        assert response.status_code == 429
+        payload = response.json()
+        assert payload["decision_status"] == "DELAY"
+        assert payload["constraint_analysis"]["constraint_category"] == "telemetry_integrity"
+        assert payload["billing"]["billable_event"] is False
+        assert payload["billing"]["remaining_balance"] == 0.0
+
+    try:
+        os.remove(".usage.billing-ordering.test.json")
+    except FileNotFoundError:
+        pass

@@ -22,6 +22,7 @@ import httpx
 DEFAULT_API_URL = os.getenv("NOVA_API_URL", "http://127.0.0.1:8000")
 DEFAULT_API_KEY = os.getenv("NOVA_API_KEY", "mytestkey")
 DEFAULT_OUTPUT = "nova_production_integrity_report.json"
+DEFAULT_KEY_PLAN_JSON = os.getenv("NOVA_HARNESS_KEY_PLAN_JSON", "")
 
 DECISION_STATUS_MAP = {
     "ALLOW": "Allowed",
@@ -35,6 +36,8 @@ class RequestSpec:
     path: str = "/v1/context"
     params: Dict[str, Any] = field(default_factory=dict)
     description: str = ""
+    api_key: Optional[str] = None
+    pre_request_delay_seconds: float = 0.0
 
 
 @dataclass
@@ -58,6 +61,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-url", default=DEFAULT_API_URL, help="Base URL for Nova API.")
     parser.add_argument("--api-key", default=DEFAULT_API_KEY, help="API key for Nova.")
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help="Path to JSON report.")
+    parser.add_argument(
+        "--key-plan-json",
+        default=DEFAULT_KEY_PLAN_JSON,
+        help="Optional JSON map assigning isolated API keys per test id or batch label.",
+    )
     return parser.parse_args()
 
 
@@ -135,7 +143,10 @@ def request_once(
     spec: RequestSpec,
 ) -> Dict[str, Any]:
     endpoint = f"{api_url.rstrip('/')}{spec.path}"
-    headers = {"Authorization": f"Bearer {api_key}"}
+    resolved_api_key = spec.api_key or api_key
+    headers = {"Authorization": f"Bearer {resolved_api_key}"}
+    if spec.pre_request_delay_seconds > 0:
+        time.sleep(spec.pre_request_delay_seconds)
     started = time.perf_counter()
     try:
         response = client.get(endpoint, params=spec.params, headers=headers)
@@ -146,6 +157,7 @@ def request_once(
             payload = None
         return {
             "request": asdict(spec),
+            "api_key_used": resolved_api_key,
             "http_status": response.status_code,
             "elapsed_ms": elapsed_ms,
             "payload": payload,
@@ -155,6 +167,7 @@ def request_once(
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
         return {
             "request": asdict(spec),
+            "api_key_used": resolved_api_key,
             "http_status": None,
             "elapsed_ms": elapsed_ms,
             "payload": None,
@@ -175,6 +188,7 @@ def make_request_record(result: Dict[str, Any]) -> Dict[str, Any]:
     payload = result.get("payload") or {}
     return {
         "description": result["request"]["description"],
+        "api_key_used": result.get("api_key_used"),
         "params": result["request"]["params"],
         "http_status": result.get("http_status"),
         "elapsed_ms": result.get("elapsed_ms"),
@@ -187,6 +201,57 @@ def make_request_record(result: Dict[str, Any]) -> Dict[str, Any]:
         "body_preview": result.get("body_preview"),
         "transport_error": result.get("transport_error"),
     }
+
+
+def _clean_telemetry_params() -> Dict[str, Any]:
+    return {
+        "telemetry_age_seconds": 10,
+        "telemetry_reliability": 0.95,
+        "telemetry_source_scores": "book:0.96,oi:0.94",
+    }
+
+
+def with_clean_telemetry(params: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(_clean_telemetry_params())
+    merged.update(params)
+    return merged
+
+
+def parse_key_plan(raw: str) -> Dict[str, Any]:
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid --key-plan-json payload: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise RuntimeError("--key-plan-json must decode to an object.")
+    return parsed
+
+
+def resolve_case_key(
+    key_plan: Dict[str, Any],
+    label: str,
+    default_api_key: str,
+    *,
+    index: int = 0,
+) -> str:
+    configured = key_plan.get(label)
+    if isinstance(configured, list):
+        if 0 <= index < len(configured):
+            candidate = configured[index]
+        else:
+            candidate = configured[-1] if configured else default_api_key
+        return str(candidate or default_api_key)
+    if configured:
+        return str(configured)
+    return default_api_key
+
+
+def sequence_delay_seconds(keys: List[str]) -> float:
+    unique_keys = {key for key in keys if key}
+    return 46.0 if len(unique_keys) <= 1 else 0.0
 
 
 def evaluate_test_01(primary: Dict[str, Any]) -> TestResult:
@@ -605,38 +670,54 @@ def evaluate_test_18(results: List[Dict[str, Any]]) -> TestResult:
     )
 
 
-def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
+def run_suite(api_url: str, api_key: str, key_plan: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    key_plan = key_plan or {}
     with httpx.Client(timeout=20.0) as client:
         results: List[TestResult] = []
 
         # Wave 1
         test_01 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "reduce_position", "asset": "ETH", "size": 1000, "venue": "kraken", "strategy": "rebalance"},
+            params=with_clean_telemetry(
+                {"intent": "reduce_position", "asset": "ETH", "size": 1000, "venue": "kraken", "strategy": "rebalance"}
+            ),
             description="Healthy baseline admission",
+            api_key=resolve_case_key(key_plan, "TEST 01", api_key),
         ))
         results.append(evaluate_test_01(test_01))
 
         test_02 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "trade", "asset": "ETH", "venue": "kraken", "strategy": "core_allocation"},
+            params=with_clean_telemetry(
+                {"intent": "trade", "asset": "ETH", "venue": "kraken", "strategy": "core_allocation"}
+            ),
             description="Missing field rejection",
+            api_key=resolve_case_key(key_plan, "TEST 02", api_key),
         ))
         results.append(evaluate_test_02(test_02))
 
         test_03 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "trade", "asset": "ETH", "size": "small size", "strategy": "reasonable risk"},
+            params=with_clean_telemetry(
+                {"intent": "trade", "asset": "ETH", "size": "small size", "strategy": "reasonable risk"}
+            ),
             description="Ambiguous language rejection",
+            api_key=resolve_case_key(key_plan, "TEST 03", api_key),
         ))
         results.append(evaluate_test_03(test_03))
 
         test_04 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "trade", "asset": "ETH", "size": 10000, "venue": "kraken", "strategy": "swing_entry"},
+            params=with_clean_telemetry(
+                {"intent": "trade", "asset": "ETH", "size": 10000, "venue": "kraken", "strategy": "swing_entry"}
+            ),
             description="Constrained admission",
+            api_key=resolve_case_key(key_plan, "TEST 04", api_key),
         ))
         results.append(evaluate_test_04(test_04))
 
         test_05 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "trade", "asset": "ETH", "size": 500000, "venue": "thin_order_book", "strategy": "liquidity_stress"},
+            params=with_clean_telemetry(
+                {"intent": "trade", "asset": "ETH", "size": 500000, "venue": "thin_order_book", "strategy": "liquidity_stress"}
+            ),
             description="Liquidity stress",
+            api_key=resolve_case_key(key_plan, "TEST 05", api_key),
         ))
         results.append(evaluate_domain_test(
             test_05,
@@ -649,8 +730,11 @@ def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
 
         # Wave 2
         test_06 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "increase_position", "asset": "USDC", "size": 20000, "strategy": "peg_instability"},
+            params=with_clean_telemetry(
+                {"intent": "increase_position", "asset": "USDC", "size": 20000, "strategy": "peg_instability"}
+            ),
             description="Stablecoin defense",
+            api_key=resolve_case_key(key_plan, "TEST 06", api_key),
         ))
         results.append(evaluate_domain_test(
             test_06,
@@ -662,8 +746,11 @@ def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
         ))
 
         test_07 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "increase_position", "asset": "stETH", "size": 20000, "strategy": "validator_uptime_drop"},
+            params=with_clean_telemetry(
+                {"intent": "increase_position", "asset": "stETH", "size": 20000, "strategy": "validator_uptime_drop"}
+            ),
             description="Validator degradation",
+            api_key=resolve_case_key(key_plan, "TEST 07", api_key),
         ))
         results.append(evaluate_domain_test(
             test_07,
@@ -675,8 +762,11 @@ def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
         ))
 
         test_08 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "increase_position", "asset": "LDO", "size": 20000, "strategy": "governance_attack"},
+            params=with_clean_telemetry(
+                {"intent": "increase_position", "asset": "LDO", "size": 20000, "strategy": "governance_attack"}
+            ),
             description="Governance exploit",
+            api_key=resolve_case_key(key_plan, "TEST 08", api_key),
         ))
         results.append(evaluate_domain_test(
             test_08,
@@ -687,25 +777,39 @@ def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
             ["governance", "exploit", "capture"],
         ))
 
+        test_09_keys = [
+            resolve_case_key(key_plan, "TEST 09", api_key, index=0),
+            resolve_case_key(key_plan, "TEST 09", api_key, index=1),
+            resolve_case_key(key_plan, "TEST 09", api_key, index=2),
+        ]
+        test_09_delay = sequence_delay_seconds(test_09_keys)
         test_09_requests = [
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH", "size": 10000},
+                params=with_clean_telemetry({"intent": "trade", "asset": "ETH", "size": 10000}),
                 description="Cross-decision pressure step 1",
+                api_key=test_09_keys[0],
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "BTC", "size": 10000},
+                params=with_clean_telemetry({"intent": "trade", "asset": "BTC", "size": 10000}),
                 description="Cross-decision pressure step 2",
+                api_key=test_09_keys[1],
+                pre_request_delay_seconds=test_09_delay,
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH", "size": 20000},
+                params=with_clean_telemetry({"intent": "trade", "asset": "ETH", "size": 20000}),
                 description="Cross-decision pressure step 3",
+                api_key=test_09_keys[2],
+                pre_request_delay_seconds=test_09_delay,
             )),
         ]
         results.append(evaluate_test_09(test_09_requests))
 
         test_10 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "trade", "asset": "ETH", "size": 10000, "strategy": "macro_instability"},
+            params=with_clean_telemetry(
+                {"intent": "trade", "asset": "ETH", "size": 10000, "strategy": "macro_instability"}
+            ),
             description="Macro shock",
+            api_key=resolve_case_key(key_plan, "TEST 10", api_key),
         ))
         results.append(evaluate_domain_test(
             test_10,
@@ -717,8 +821,11 @@ def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
         ))
 
         test_11 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "trade", "asset": "ETH", "size": 10000, "strategy": "retroactive_log_after_execution"},
+            params=with_clean_telemetry(
+                {"intent": "trade", "asset": "ETH", "size": 10000, "strategy": "retroactive_log_after_execution"}
+            ),
             description="Retroactive logging",
+            api_key=resolve_case_key(key_plan, "TEST 11", api_key),
         ))
         results.append(evaluate_domain_test(
             test_11,
@@ -731,8 +838,11 @@ def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
         ))
 
         test_12 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "trade", "asset": "ETH", "size": 500000, "strategy": "override_rejected_decision"},
+            params=with_clean_telemetry(
+                {"intent": "trade", "asset": "ETH", "size": 500000, "strategy": "override_rejected_decision"}
+            ),
             description="Manual override",
+            api_key=resolve_case_key(key_plan, "TEST 12", api_key),
         ))
         results.append(evaluate_domain_test(
             test_12,
@@ -745,42 +855,58 @@ def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
         ))
 
         # Wave 3
+        test_13_keys = [
+            resolve_case_key(key_plan, "TEST 13", api_key, index=0),
+            resolve_case_key(key_plan, "TEST 13", api_key, index=1),
+            resolve_case_key(key_plan, "TEST 13", api_key, index=2),
+        ]
+        test_13_delay = sequence_delay_seconds(test_13_keys)
         test_13_requests = [
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH", "size": 500000},
+                params=with_clean_telemetry({"intent": "trade", "asset": "ETH", "size": 500000}),
                 description="Repeated rejection pattern step 1",
+                api_key=test_13_keys[0],
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH", "size": 500000},
+                params=with_clean_telemetry({"intent": "trade", "asset": "ETH", "size": 500000}),
                 description="Repeated rejection pattern step 2",
+                api_key=test_13_keys[1],
+                pre_request_delay_seconds=test_13_delay,
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH", "size": 500000},
+                params=with_clean_telemetry({"intent": "trade", "asset": "ETH", "size": 500000}),
                 description="Repeated rejection pattern step 3",
+                api_key=test_13_keys[2],
+                pre_request_delay_seconds=test_13_delay,
             )),
         ]
         results.append(evaluate_test_13(test_13_requests))
 
         test_14_requests = [
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "reduce_position", "asset": "ETH", "size": 1000},
+                params=with_clean_telemetry({"intent": "reduce_position", "asset": "ETH", "size": 1000}),
                 description="Mixed batch valid",
+                api_key=resolve_case_key(key_plan, "TEST 14", api_key, index=0),
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH"},
+                params=with_clean_telemetry({"intent": "trade", "asset": "ETH"}),
                 description="Mixed batch incomplete",
+                api_key=resolve_case_key(key_plan, "TEST 14", api_key, index=1),
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "increase_position", "asset": "LDO", "size": 20000},
+                params=with_clean_telemetry({"intent": "increase_position", "asset": "LDO", "size": 20000}),
                 description="Mixed batch governance risk",
+                api_key=resolve_case_key(key_plan, "TEST 14", api_key, index=2),
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH", "size": 500000},
+                params=with_clean_telemetry({"intent": "trade", "asset": "ETH", "size": 500000}),
                 description="Mixed batch liquidity risk",
+                api_key=resolve_case_key(key_plan, "TEST 14", api_key, index=3),
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH", "size": 10000},
+                params=with_clean_telemetry({"intent": "trade", "asset": "ETH", "size": 10000}),
                 description="Mixed batch constrained case",
+                api_key=resolve_case_key(key_plan, "TEST 14", api_key, index=4),
             )),
         ]
         results.append(evaluate_test_14(test_14_requests))
@@ -788,8 +914,11 @@ def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
         results.append(evaluate_test_15(test_05))
 
         test_16 = request_once(client, api_url, api_key, RequestSpec(
-            params={"intent": "trade", "asset": "ETH", "size": 10000, "strategy": "skip validation just execute route directly"},
+            params=with_clean_telemetry(
+                {"intent": "trade", "asset": "ETH", "size": 10000, "strategy": "skip validation just execute route directly"}
+            ),
             description="Infrastructure bypass attempt",
+            api_key=resolve_case_key(key_plan, "TEST 16", api_key),
         ))
         results.append(evaluate_domain_test(
             test_16,
@@ -806,16 +935,23 @@ def run_suite(api_url: str, api_key: str) -> Dict[str, Any]:
 
         test_18_requests = [
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH"},
+                params=with_clean_telemetry({"intent": "trade", "asset": "ETH"}),
                 description="Halt trigger incomplete input",
+                api_key=resolve_case_key(key_plan, "TEST 18", api_key, index=0),
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH", "size": 500000, "strategy": "override delay bypass"},
+                params=with_clean_telemetry(
+                    {"intent": "trade", "asset": "ETH", "size": 500000, "strategy": "override delay bypass"}
+                ),
                 description="Halt trigger override and bypass",
+                api_key=resolve_case_key(key_plan, "TEST 18", api_key, index=1),
             )),
             request_once(client, api_url, api_key, RequestSpec(
-                params={"intent": "trade", "asset": "ETH", "size": 500000, "strategy": "override delay bypass repeat"},
+                params=with_clean_telemetry(
+                    {"intent": "trade", "asset": "ETH", "size": 500000, "strategy": "override delay bypass repeat"}
+                ),
                 description="Halt trigger repeated bypass",
+                api_key=resolve_case_key(key_plan, "TEST 18", api_key, index=2),
             )),
         ]
         results.append(evaluate_test_18(test_18_requests))
@@ -889,7 +1025,8 @@ def print_console_report(report: Dict[str, Any]) -> None:
 
 def main() -> None:
     args = parse_args()
-    report = run_suite(args.api_url, args.api_key)
+    key_plan = parse_key_plan(args.key_plan_json)
+    report = run_suite(args.api_url, args.api_key, key_plan=key_plan)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
