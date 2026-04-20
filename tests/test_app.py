@@ -17,6 +17,7 @@ TEST_KEYS = {
             "/v1/regime",
             "/v1/epoch",
             "/v1/context",
+            "/v1/proof/{decision_id}",
             "/v1/key-info",
             "/v1/usage",
             "/v1/usage/reset",
@@ -31,6 +32,7 @@ TEST_KEYS = {
             "/v1/regime",
             "/v1/epoch",
             "/v1/context",
+            "/v1/proof/{decision_id}",
             "/v1/key-info",
             "/v1/usage",
         ],
@@ -44,6 +46,7 @@ TEST_KEYS = {
             "/v1/regime",
             "/v1/epoch",
             "/v1/context",
+            "/v1/proof/{decision_id}",
             "/v1/key-info",
             "/v1/usage",
         ],
@@ -57,6 +60,7 @@ TEST_KEYS = {
             "/v1/regime",
             "/v1/epoch",
             "/v1/context",
+            "/v1/proof/{decision_id}",
             "/v1/key-info",
             "/v1/usage",
         ],
@@ -70,6 +74,7 @@ TEST_KEYS = {
             "/v1/regime",
             "/v1/epoch",
             "/v1/context",
+            "/v1/proof/{decision_id}",
             "/v1/key-info",
             "/v1/usage",
         ],
@@ -83,6 +88,7 @@ TEST_KEYS = {
             "/v1/regime",
             "/v1/epoch",
             "/v1/context",
+            "/v1/proof/{decision_id}",
             "/v1/key-info",
             "/v1/usage",
             "/v1/usage/reset",
@@ -97,6 +103,7 @@ TEST_KEYS = {
             "/v1/regime",
             "/v1/epoch",
             "/v1/context",
+            "/v1/proof/{decision_id}",
             "/v1/key-info",
             "/v1/usage",
         ],
@@ -118,6 +125,7 @@ TEST_KEYS = {
             "/v1/regime",
             "/v1/epoch",
             "/v1/context",
+            "/v1/proof/{decision_id}",
             "/v1/key-info",
             "/v1/usage",
         ],
@@ -159,6 +167,7 @@ TEST_KEYS = {
             "/v1/regime",
             "/v1/epoch",
             "/v1/context",
+            "/v1/proof/{decision_id}",
             "/v1/key-info",
             "/v1/governance-profile",
             "/v1/usage",
@@ -234,7 +243,15 @@ TEST_KEYS = {
 def client():
     """Create a test client with mocked NOVA_KEYS_JSON."""
     keys_json = json.dumps(TEST_KEYS)
-    with patch.dict(os.environ, {"NOVA_KEYS_JSON": keys_json, "NOVA_USAGE_FILE": ".usage.test.json"}):
+    with patch.dict(
+        os.environ,
+        {
+            "NOVA_KEYS_JSON": keys_json,
+            "NOVA_USAGE_FILE": ".usage.test.json",
+            "NOVA_PROOF_FILE": ".proof.test.json",
+            "NOVA_PROOF_RETRIEVAL_AUDIT_FILE": "proof_retrieval_audit.test.jsonl",
+        },
+    ):
         sys.modules.pop("app", None)
         app_module = importlib.import_module("app")
         app = app_module.app
@@ -248,6 +265,7 @@ def client():
         SYSTEM_STATE_REGISTRY = app_module.SYSTEM_STATE_REGISTRY
         PERMISSION_BUDGET_STATE = app_module.PERMISSION_BUDGET_STATE
         HALT_RELEASE_STATE = app_module.HALT_RELEASE_STATE
+        PROOF_REGISTRY = app_module.PROOF_REGISTRY
         USAGE_TRACKING.clear()
         REJECTION_LEDGER.clear()
         EXCEPTION_REGISTER.clear()
@@ -258,6 +276,7 @@ def client():
         SYSTEM_STATE_REGISTRY.clear()
         PERMISSION_BUDGET_STATE.clear()
         HALT_RELEASE_STATE.clear()
+        PROOF_REGISTRY.clear()
         yield TestClient(app)
         USAGE_TRACKING.clear()
         REJECTION_LEDGER.clear()
@@ -269,8 +288,17 @@ def client():
         SYSTEM_STATE_REGISTRY.clear()
         PERMISSION_BUDGET_STATE.clear()
         HALT_RELEASE_STATE.clear()
+        PROOF_REGISTRY.clear()
         try:
             os.remove(".usage.test.json")
+        except FileNotFoundError:
+            pass
+        try:
+            os.remove(".proof.test.json")
+        except FileNotFoundError:
+            pass
+        try:
+            os.remove("proof_retrieval_audit.test.jsonl")
         except FileNotFoundError:
             pass
 
@@ -309,6 +337,192 @@ def test_context_includes_guardrail_action_policy(client):
     assert payload["decision_status"] in {"ALLOW", "CONSTRAIN", "VETO"}
     assert "reflex_memory" in payload
     assert payload["decision_context"]["reflex_influence_applied"] is True
+    assert "decision_id" in payload
+
+
+def test_context_method_is_preserved_as_get(client):
+    post_response = client.post(
+        "/v1/context",
+        headers={"Authorization": "Bearer admin-key"},
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+
+    assert post_response.status_code == 405
+
+
+def test_proof_retrieval_is_owner_scoped_and_authorized(client):
+    response = client.get(
+        "/v1/context",
+        headers={"Authorization": "Bearer pro-key"},
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+    assert response.status_code == 200
+    decision_id = response.json()["decision_id"]
+
+    allowed = client.get(f"/v1/proof/{decision_id}", headers={"Authorization": "Bearer pro-key"})
+    denied = client.get(f"/v1/proof/{decision_id}", headers={"Authorization": "Bearer admin-key"})
+
+    assert allowed.status_code == 200
+    assert allowed.json()["decision_id"] == decision_id
+    assert denied.status_code == 404
+    assert denied.json()["detail"] == "Proof not found"
+
+
+def test_proof_hash_is_deterministic_for_identical_normalized_inputs(client, monkeypatch):
+    monkeypatch.setenv("NOVA_TIMESTAMP_UTC", "2026-04-20T10:00:00+00:00")
+    monkeypatch.setenv("NOVA_NOW_UTC", "2026-04-20T10:00:00+00:00")
+    first = client.get(
+        "/v1/context",
+        headers={"Authorization": "Bearer pro-key"},
+        params={"intent": "reduce_position", "asset": "ETH", "size": 1000},
+    )
+    first_proof = client.get(
+        f"/v1/proof/{first.json()['decision_id']}",
+        headers={"Authorization": "Bearer pro-key"},
+    )
+
+    monkeypatch.setenv("NOVA_TIMESTAMP_UTC", "2026-04-20T11:15:00+00:00")
+    monkeypatch.setenv("NOVA_NOW_UTC", "2026-04-20T11:15:00+00:00")
+    second = client.get(
+        "/v1/context",
+        headers={"Authorization": "Bearer pro-key"},
+        params={"intent": "reduce_position", "asset": "ETH", "size": 1000},
+    )
+    second_proof = client.get(
+        f"/v1/proof/{second.json()['decision_id']}",
+        headers={"Authorization": "Bearer pro-key"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first_proof.status_code == 200
+    assert second_proof.status_code == 200
+    assert (
+        first_proof.json()["validation"]["reproducibility_hash"]
+        == second_proof.json()["validation"]["reproducibility_hash"]
+    )
+
+
+def test_proof_exposure_boundary_stays_outcome_based(client):
+    response = client.get(
+        "/v1/context",
+        headers={"Authorization": "Bearer admin-key"},
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+    proof = client.get(
+        f"/v1/proof/{response.json()['decision_id']}",
+        headers={"Authorization": "Bearer admin-key"},
+    )
+
+    assert proof.status_code == 200
+    payload = proof.json()
+    serialized = json.dumps(payload)
+
+    assert "decision_context" in payload
+    assert "nova_evaluation" in payload
+    assert "proof" in payload
+    assert "validation" in payload
+    assert "reflex_memory" not in serialized
+    assert "confidence_weight" not in serialized
+    assert "constraint_trace" not in serialized
+    assert "triggered_registry_id" not in serialized
+
+
+def test_proof_classification_covers_market_process_telemetry_and_billing(client):
+    market = client.get(
+        "/v1/context",
+        headers={"Authorization": "Bearer admin-key"},
+        params={"intent": "trade", "asset": "ETH", "size": 10000},
+    )
+    market_proof = client.get(
+        f"/v1/proof/{market.json()['decision_id']}",
+        headers={"Authorization": "Bearer admin-key"},
+    )
+    assert "market_system_risk" in market_proof.json()["proof"]["classification"]
+
+    process = client.get(
+        "/v1/context",
+        headers={"Authorization": "Bearer admin-key"},
+        params={"intent": "trade", "asset": "ETH"},
+    )
+    process_proof = client.get(
+        f"/v1/proof/{process.json()['decision_id']}",
+        headers={"Authorization": "Bearer admin-key"},
+    )
+    assert "process_integrity" in process_proof.json()["proof"]["classification"]
+
+    telemetry = client.get(
+        "/v1/context",
+        headers={"Authorization": "Bearer full-governance-key"},
+        params={
+            "intent": "trade",
+            "asset": "ETH",
+            "size": 10000,
+            "telemetry_age_seconds": 1200,
+            "telemetry_reliability": 0.95,
+        },
+    )
+    telemetry_proof = client.get(
+        f"/v1/proof/{telemetry.json()['decision_id']}",
+        headers={"Authorization": "Bearer full-governance-key"},
+    )
+    assert "telemetry_integrity" in telemetry_proof.json()["proof"]["classification"]
+
+
+def test_billing_enforcement_proof_classification_is_closed():
+    keys = {
+        "billing-key": {
+            "owner": "billing-user",
+            "tier": "pro",
+            "status": "active",
+            "monthly_quota": 100,
+            "prepaid_balance": 0.0,
+            "allowed_endpoints": [
+                "/v1/context",
+                "/v1/proof/{decision_id}",
+                "/v1/usage",
+                "/v1/billing",
+                "/v1/balance",
+                "/v1/funding-instructions",
+            ],
+        }
+    }
+
+    with patch.dict(
+        os.environ,
+        {
+            "NOVA_KEYS_JSON": json.dumps(keys),
+            "NOVA_USAGE_FILE": ".usage.billing-proof.test.json",
+            "NOVA_PROOF_FILE": ".proof.billing.test.json",
+            "NOVA_RUNTIME_MODE": "test",
+            "NOVA_ENABLE_BILLING_ENFORCEMENT": "1",
+            "NOVA_DEFAULT_PREPAID_BALANCE": "0.0",
+        },
+        clear=False,
+    ):
+        sys.modules.pop("app", None)
+        app_module = importlib.import_module("app")
+        test_client = TestClient(app_module.app)
+
+        response = test_client.get(
+            "/v1/context",
+            headers={"Authorization": "Bearer billing-key"},
+            params={"intent": "reduce_position", "asset": "ETH", "size": 1000},
+        )
+        assert response.status_code == 402
+        proof = test_client.get(
+            f"/v1/proof/{response.json()['decision_id']}",
+            headers={"Authorization": "Bearer billing-key"},
+        )
+
+        assert proof.status_code == 200
+        assert proof.json()["proof"]["classification"] == ["billing_enforcement"]
+
+    for path in [".usage.billing-proof.test.json", ".proof.billing.test.json"]:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
 
 # Test B: Billable endpoints increment usage

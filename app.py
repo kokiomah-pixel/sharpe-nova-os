@@ -3,6 +3,7 @@ import os
 import hmac
 import hashlib
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
@@ -95,6 +96,7 @@ NON_BILLABLE_ENDPOINTS = {
     "/health",
     "/v1/key-info",
     "/v1/governance-profile",
+    "/v1/proof/{decision_id}",
     "/v1/usage",
     "/v1/billing",
     "/v1/balance",
@@ -136,6 +138,12 @@ PERMISSION_BUDGET_STATE: Dict[str, Dict[str, Any]] = {}
 HALT_RELEASE_STATE: Dict[str, Dict[str, Any]] = {}
 DECISION_QUEUE_STATE: Dict[str, Dict[str, Any]] = {}
 GOVERNANCE_PROFILE_LOGGED: set[str] = set()
+PROOF_REGISTRY: Dict[str, Dict[str, Any]] = {}
+PROOF_LOCK = Lock()
+PROOF_FILE = Path(os.getenv("NOVA_PROOF_FILE", ".proof_registry.json")).expanduser()
+PROOF_RETRIEVAL_AUDIT_FILE = Path(
+    os.getenv("NOVA_PROOF_RETRIEVAL_AUDIT_FILE", "proof_retrieval_audit.jsonl")
+).expanduser()
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
@@ -327,6 +335,15 @@ def _load_json_file(path: Optional[Path]) -> Dict[str, Dict[str, Any]]:
     return {}
 
 
+def _append_jsonl_file(path: Path, entry: Dict[str, Any]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, sort_keys=True) + "\n")
+    except Exception:
+        pass
+
+
 def _get_redis_usage(api_key: str) -> Dict[str, Any]:
     client = _get_redis_client()
     if not client:
@@ -387,6 +404,7 @@ _validate_billing_runtime_configuration()
 if not NOVA_REDIS_URL:
     USAGE_TRACKING.update(_load_usage_file())
 BILLING_LEDGER.update(_load_json_file(BILLING_FILE))
+PROOF_REGISTRY.update(_load_json_file(PROOF_FILE))
 
 
 def _round_currency(value: float) -> float:
@@ -726,6 +744,7 @@ def load_key_registry() -> Dict[str, Dict[str, Any]]:
             "/v1/context",
             "/v1/key-info",
             "/v1/governance-profile",
+            "/v1/proof/{decision_id}",
             "/v1/usage",
             "/v1/billing",
             "/v1/balance",
@@ -747,6 +766,7 @@ def load_key_registry() -> Dict[str, Dict[str, Any]]:
             "/v1/context",
             "/v1/key-info",
             "/v1/governance-profile",
+            "/v1/proof/{decision_id}",
             "/v1/usage",
             "/v1/billing",
             "/v1/balance",
@@ -848,6 +868,15 @@ def get_key_record(api_key: str) -> Dict[str, Any]:
     return record
 
 
+def _path_matches_allowed_endpoint(path: str, allowed_path: str) -> bool:
+    if path == allowed_path:
+        return True
+    if "{decision_id}" in allowed_path:
+        prefix, _, suffix = allowed_path.partition("{decision_id}")
+        return path.startswith(prefix) and path.endswith(suffix)
+    return False
+
+
 def require_entitlement(
     request: Request,
     authorization: Optional[str],
@@ -859,7 +888,7 @@ def require_entitlement(
     path = request.url.path
     allowed = record.get("allowed_endpoints", [])
 
-    if path not in allowed:
+    if not any(_path_matches_allowed_endpoint(path, allowed_path) for allowed_path in allowed):
         raise HTTPException(status_code=403, detail="API key not allowed for this endpoint")
 
     if path in ADMIN_ONLY_ENDPOINTS and record.get("tier") != "admin":
@@ -995,6 +1024,308 @@ def _request_snapshot(
 def _build_request_id(timestamp: str, snapshot: Dict[str, Any]) -> str:
     raw = json.dumps({"timestamp": timestamp, "snapshot": snapshot}, sort_keys=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _proof_environment_tag() -> str:
+    return "live" if _is_production_runtime() else "simulation"
+
+
+def _decision_status_for_proof(decision_status: Optional[str]) -> str:
+    normalized = str(decision_status or "").strip().upper()
+    status_map = {
+        "ALLOW": "ALLOW",
+        "CONSTRAIN": "CONSTRAIN",
+        "REDUCE": "CONSTRAIN",
+        "VETO": "DENY",
+        "DENY": "DENY",
+        "DELAY": "DELAY",
+        "HALT": "HALT",
+        "RETRY_DELAYED": "DELAY",
+        "RETRY_BLOCKED": "DENY",
+        "PRESSURE_ESCALATED": "HALT",
+    }
+    return status_map.get(normalized, "DENY")
+
+
+def _decision_context_for_proof(payload: Dict[str, Any]) -> Dict[str, Any]:
+    decision_context = payload.get("decision_context", {})
+    if not isinstance(decision_context, dict):
+        decision_context = {}
+    intent = decision_context.get("intent") or payload.get("intent")
+    asset = decision_context.get("asset") or payload.get("asset")
+    return {
+        "asset": asset,
+        "intent": _decision_direction(intent),
+        "requested_action": str(intent or "unspecified"),
+    }
+
+
+def _classify_proof(payload: Dict[str, Any]) -> List[str]:
+    decision_status = _decision_status_for_proof(payload.get("decision_status"))
+    constraint_analysis = payload.get("constraint_analysis", {})
+    constraint_trace = payload.get("constraint_trace", {})
+    if not isinstance(constraint_analysis, dict):
+        constraint_analysis = {}
+    if not isinstance(constraint_trace, dict):
+        constraint_trace = {}
+
+    category = str(constraint_analysis.get("constraint_category") or constraint_trace.get("constraint_category") or "").strip()
+    domain = str(constraint_trace.get("telemetry_domain") or "").strip()
+    classifications: List[str] = []
+
+    if category == "billing" or domain == "billing":
+        classifications.append("billing_enforcement")
+    elif category in {
+        "telemetry_integrity",
+    } or domain in {
+        "telemetry_integrity",
+        "stablecoin_telemetry",
+        "validator_telemetry",
+        "governance_telemetry",
+        "macro_telemetry",
+        "execution_telemetry",
+    } and decision_status in {"DENY", "DELAY", "HALT"}:
+        classifications.append("telemetry_integrity")
+    elif category in {
+        "temporal_governance",
+        "loop_integrity",
+        "halt_release_governance",
+        "incomplete_decision_record",
+        "ambiguous_constraint_language",
+        "invalid_size_format",
+        "process_integrity_violation",
+    }:
+        classifications.append("process_integrity")
+    elif decision_status != "ALLOW":
+        classifications.append("market_system_risk")
+
+    return sorted(set(classifications))
+
+
+def _constraint_effect_for_proof(payload: Dict[str, Any], decision_status: str) -> Dict[str, Any]:
+    constraint_analysis = payload.get("constraint_analysis", {})
+    if not isinstance(constraint_analysis, dict):
+        constraint_analysis = {}
+    category = str(constraint_analysis.get("constraint_category") or "").strip()
+
+    effect_type = "none"
+    if decision_status == "CONSTRAIN":
+        effect_type = "concentration_limited" if category == "permission_budgeting" else "exposure_reduction"
+    elif decision_status == "DENY":
+        effect_type = "entry_blocked"
+    elif decision_status == "DELAY":
+        effect_type = "delayed"
+    elif decision_status == "HALT":
+        effect_type = "halted"
+
+    return {
+        "constraint_applied": decision_status != "ALLOW",
+        "effect_type": effect_type,
+    }
+
+
+def _prevented_action_for_proof(payload: Dict[str, Any], decision_status: str) -> Dict[str, Any]:
+    decision_context = payload.get("decision_context", {})
+    impact = payload.get("impact_on_outcomes", {})
+    constraint_analysis = payload.get("constraint_analysis", {})
+    if not isinstance(decision_context, dict):
+        decision_context = {}
+    if not isinstance(impact, dict):
+        impact = {}
+    if not isinstance(constraint_analysis, dict):
+        constraint_analysis = {}
+
+    requested_size = decision_context.get("requested_size")
+    adjusted_size = impact.get("adjusted_size")
+    constraint_category = str(constraint_analysis.get("constraint_category") or "").strip()
+    decision_direction = _decision_direction(decision_context.get("intent"))
+
+    action_type = "none"
+    if constraint_category == "billing":
+        action_type = "billing_unlock"
+    elif constraint_category in {"temporal_governance", "loop_integrity", "halt_release_governance"}:
+        action_type = "process_step"
+    elif decision_status == "CONSTRAIN":
+        action_type = "increase" if decision_direction == "risk_increasing" else "concentration"
+    elif decision_status in {"DENY", "DELAY", "HALT"}:
+        action_type = "entry"
+
+    original_request: Any = requested_size
+    adjusted_outcome: Any = adjusted_size
+    if original_request is None:
+        original_request = {
+            "intent": decision_context.get("intent"),
+            "asset": decision_context.get("asset"),
+        }
+    if adjusted_outcome is None:
+        adjusted_outcome = {"decision_status": decision_status}
+
+    return {
+        "type": action_type,
+        "original_request": original_request,
+        "adjusted_outcome": adjusted_outcome,
+    }
+
+
+def _intervention_type_for_proof(decision_status: str, effect_type: str) -> str:
+    if decision_status == "ALLOW":
+        return "none"
+    if effect_type in {"exposure_reduction", "concentration_limited"}:
+        return "reduced"
+    if effect_type == "delayed":
+        return "delayed"
+    if effect_type == "halted":
+        return "halted"
+    return "blocked"
+
+
+def _proof_memory_influence(payload: Dict[str, Any]) -> Dict[str, Any]:
+    decision_context = payload.get("decision_context", {})
+    reflex_memory = payload.get("reflex_memory", {})
+    influence_present = bool(payload.get("memory_influence_invoked"))
+    if isinstance(decision_context, dict):
+        influence_present = influence_present or bool(decision_context.get("reflex_influence_applied"))
+    if isinstance(reflex_memory, dict):
+        influence_present = influence_present or bool(reflex_memory.get("influence_applied"))
+    return {
+        "influence_present": influence_present,
+        "influence_type": "historical_constraint",
+    }
+
+
+def _normalized_proof_hash_material(
+    *,
+    decision_context: Dict[str, Any],
+    decision_status: str,
+    system_state: Any,
+    constraint_effect: Dict[str, Any],
+    classification: List[str],
+    intervention_type: str,
+    api_version: str,
+) -> Dict[str, Any]:
+    # Deterministic proof normalization rules:
+    # - include only canonical request semantics and final outcome fields
+    # - sort closed-enum classifications
+    # - exclude timestamps, decision ids, storage metadata, and runtime artifacts
+    return {
+        "api_version": api_version,
+        "classification": sorted(classification),
+        "constraint_effect": {
+            "constraint_applied": bool(constraint_effect.get("constraint_applied")),
+            "effect_type": str(constraint_effect.get("effect_type") or "none"),
+        },
+        "decision_context": {
+            "asset": decision_context.get("asset"),
+            "intent": decision_context.get("intent"),
+            "requested_action": decision_context.get("requested_action"),
+        },
+        "decision_status": decision_status,
+        "hash_schema_version": "proof_norm_v1",
+        "intervention_type": intervention_type,
+        "system_state": system_state,
+    }
+
+
+def _build_proof_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    api_version = app.version
+    decision_context = _decision_context_for_proof(payload)
+    decision_status = _decision_status_for_proof(payload.get("decision_status"))
+    system_state = payload.get("system_state")
+    constraint_effect = _constraint_effect_for_proof(payload, decision_status)
+    classification = _classify_proof(payload)
+    intervention_type = _intervention_type_for_proof(decision_status, constraint_effect["effect_type"])
+    hash_material = _normalized_proof_hash_material(
+        decision_context=decision_context,
+        decision_status=decision_status,
+        system_state=system_state,
+        constraint_effect=constraint_effect,
+        classification=classification,
+        intervention_type=intervention_type,
+        api_version=api_version,
+    )
+    reproducibility_hash = hashlib.sha256(
+        json.dumps(hash_material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "decision_context": decision_context,
+        "nova_evaluation": {
+            "decision_status": decision_status,
+            "system_state": system_state,
+            "constraint_effect": constraint_effect,
+        },
+        "proof": {
+            "prevented_action": _prevented_action_for_proof(payload, decision_status),
+            "classification": classification,
+            "intervention_type": intervention_type,
+            "memory_influence": _proof_memory_influence(payload),
+        },
+        "validation": {
+            "environment": _proof_environment_tag(),
+            "reproducibility_hash": reproducibility_hash,
+            "api_version": api_version,
+        },
+    }
+
+
+def _final_response_fields_for_proof(payload: Dict[str, Any]) -> Dict[str, Any]:
+    decision_context = payload.get("decision_context", {})
+    impact = payload.get("impact_on_outcomes", {})
+    constraint_analysis = payload.get("constraint_analysis", {})
+    billing = payload.get("billing", {})
+    return {
+        "decision_status": payload.get("decision_status"),
+        "system_state": payload.get("system_state"),
+        "decision_context": decision_context if isinstance(decision_context, dict) else {},
+        "impact_on_outcomes": impact if isinstance(impact, dict) else {},
+        "constraint_analysis": constraint_analysis if isinstance(constraint_analysis, dict) else {},
+        "billing": billing if isinstance(billing, dict) else {},
+    }
+
+
+def _attach_proof_to_payload(payload: Dict[str, Any], *, owner: Any) -> Dict[str, Any]:
+    decision_id = str(uuid.uuid4())
+    proof_payload = _build_proof_payload(payload)
+    record = {
+        "decision_id": decision_id,
+        "owner": owner,
+        "normalized_request": proof_payload["decision_context"],
+        "final_response_fields": _final_response_fields_for_proof(payload),
+        "proof": {
+            "decision_id": decision_id,
+            **proof_payload,
+        },
+        "environment": proof_payload["validation"]["environment"],
+        "api_version": proof_payload["validation"]["api_version"],
+        "reproducibility_hash": proof_payload["validation"]["reproducibility_hash"],
+        "retrieval_scope": "owner",
+    }
+    with PROOF_LOCK:
+        PROOF_REGISTRY[decision_id] = record
+        _write_json_file(PROOF_FILE, PROOF_REGISTRY)
+    payload["decision_id"] = decision_id
+    return payload
+
+
+def _proof_record_for_owner(decision_id: str, owner: Any) -> Optional[Dict[str, Any]]:
+    record = PROOF_REGISTRY.get(decision_id)
+    if not isinstance(record, dict):
+        return None
+    if record.get("owner") != owner:
+        return None
+    return record
+
+
+def _audit_proof_retrieval(*, decision_id: str, owner: Any, api_key: str, result: str) -> None:
+    _append_jsonl_file(
+        PROOF_RETRIEVAL_AUDIT_FILE,
+        {
+            "timestamp_utc": get_current_timestamp(),
+            "decision_id": decision_id,
+            "owner": owner,
+            "api_key": api_key,
+            "result": result,
+        },
+    )
 
 
 def _decision_family(intent: Optional[str], asset: Optional[str]) -> str:
@@ -2177,7 +2508,7 @@ def _apply_human_intervention_taxonomy(payload: Dict[str, Any]) -> Dict[str, Any
             "authorization_scope": "halt_release_governance",
             "intervention_reason": "halt_release_required",
         })
-    elif "override_attempt" in exception_categories:
+    elif payload.get("decision_status") == "VETO" and "override_attempt" in exception_categories:
         intervention.update({
             "human_intervention_type": "override_attempt_detected",
             "human_intervention_required": True,
@@ -2191,14 +2522,18 @@ def _apply_human_intervention_taxonomy(payload: Dict[str, Any]) -> Dict[str, Any
             "authorization_scope": "decision_record_clarification",
             "intervention_reason": str(constraint_category),
         })
-    elif exception_categories & {"retroactive_attempt", "delayed_logging_attempt", "bypass_attempt"}:
+    elif constraint_category not in {"telemetry_integrity", "billing", "halt_release_governance"} and exception_categories & {
+        "retroactive_attempt",
+        "delayed_logging_attempt",
+        "bypass_attempt",
+    }:
         intervention.update({
             "human_intervention_type": "exception_authorization_required",
             "human_intervention_required": True,
             "authorization_scope": "process_integrity_exception_authorization",
             "intervention_reason": "process_integrity_violation",
         })
-    elif payload.get("system_state") == "HALT_RECOMMENDED" or payload.get("escalation_flag"):
+    elif payload.get("system_state") == "HALT_RECOMMENDED":
         intervention.update({
             "human_intervention_type": "approval_required",
             "human_intervention_required": True,
@@ -2801,6 +3136,7 @@ def _build_structured_response(
     payload = _apply_system_state(payload, api_key)
     payload = _apply_human_intervention_taxonomy(payload)
     _apply_context_billing(payload, api_key, get_key_record(api_key), decision_status)
+    payload = _attach_proof_to_payload(payload, owner=get_key_record(api_key).get("owner"))
     payload["signature"] = sign_payload(payload)
     return JSONResponse(payload, status_code=status_code)
 
@@ -4599,6 +4935,7 @@ def get_context(
             queue_fields=queue_fields,
             memory_fields=memory_fields,
         )
+    payload = _attach_proof_to_payload(payload, owner=entitlement["owner"])
     payload["signature"] = sign_payload(payload)
     return JSONResponse(payload)
 
@@ -4619,6 +4956,35 @@ def key_info(
         "allowed_endpoints": entitlement["allowed_endpoints"],
         "active_governance_layers": governance_profile["active_governance_layers"],
     }
+    payload["signature"] = sign_payload(payload)
+    return JSONResponse(payload)
+
+
+@app.get("/v1/proof/{decision_id}")
+def get_proof(
+    decision_id: str,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None, alias="x-api-key"),
+) -> JSONResponse:
+    entitlement = require_entitlement(request, authorization, x_api_key)
+    record = _proof_record_for_owner(decision_id, entitlement["owner"])
+    if record is None:
+        _audit_proof_retrieval(
+            decision_id=decision_id,
+            owner=entitlement["owner"],
+            api_key=entitlement["api_key"],
+            result="not_found",
+        )
+        raise HTTPException(status_code=404, detail="Proof not found")
+
+    _audit_proof_retrieval(
+        decision_id=decision_id,
+        owner=entitlement["owner"],
+        api_key=entitlement["api_key"],
+        result="success",
+    )
+    payload = dict(record["proof"])
     payload["signature"] = sign_payload(payload)
     return JSONResponse(payload)
 

@@ -1,0 +1,4 @@
+{"api_key": "billing-key", "decision_id": "85c43467-98da-4982-bbc2-ae1dcd95b9a3", "owner": "billing-user", "result": "success", "timestamp_utc": "2026-04-20T18:45:51.541504+00:00"}
+{"api_key": "billing-key", "decision_id": "1552d02d-b5ee-4414-9b3e-63df2ce0d084", "owner": "billing-user", "result": "success", "timestamp_utc": "2026-04-20T18:45:58.463493+00:00"}
+{"api_key": "billing-key", "decision_id": "ee637fdf-1bfd-4105-afda-c7d7bb760e33", "owner": "billing-user", "result": "success", "timestamp_utc": "2026-04-20T18:46:40.612907+00:00"}
+{"api_key": "billing-key", "decision_id": "1f92a3e5-dede-4be7-b2ad-352d07e03e9a", "owner": "billing-user", "result": "success", "timestamp_utc": "2026-04-20T18:47:15.339793+00:00"}
