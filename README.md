@@ -1,6 +1,6 @@
 # Sharpe Nova OS
 
-Sharpe Nova OS is a pre-execution decision discipline layer that conditions capital before it moves.
+Sharpe Nova OS is a pre-execution decision discipline layer that conditions and verifies whether capital is allowed to move before execution.
 
 ## What This Is
 
@@ -23,12 +23,35 @@ Sharpe Nova OS is a pre-execution decision discipline layer that conditions capi
 ## System Boundary
 
 All interaction is governed through the Nova API.
-The API output is authoritative.
+
+The API output is authoritative and auditable.
+Each decision produces a deterministic outcome and a verifiable proof surface.
+
 No interpretation beyond contract is permitted.
 
 ## Canonical Interface
 
 Nova API is the machine-readable interface to the pre-execution decision layer.
+
+## Proof Layer
+
+Every decision is bound to a verifiable proof object.
+
+- `/v1/context` returns a governed decision and `decision_id`
+- `/v1/proof/{decision_id}` returns the audit surface for that decision
+
+Proof includes:
+
+- `decision_status`
+- `constraint_effect`
+- `failure_class`
+- `intervention_type`
+- `memory_influence`
+- `system_state`
+- `reproducibility_hash`
+
+Proof reflects the final governing outcome only.
+Internal logic, scoring, and Reflex Memory structure are not exposed.
 
 Primary root surfaces:
 
@@ -68,14 +91,24 @@ curl -s -H "Authorization: Bearer mytestkey" \
   "http://127.0.0.1:8000/v1/context?intent=trade&asset=ETH&size=10000"
 ```
 
-Evaluate the response through contract fields such as:
+Evaluate the response through contract fields:
 
 - `decision_status`
-- `constraint_analysis`
-- `impact_on_outcomes`
-- `adjustment`
+- `constraint_effect`
+- `intervention_type`
+- `failure_class`
+- `system_state`
+
+Retrieve proof:
+
+```bash
+curl -s -H "Authorization: Bearer mytestkey" \
+  "http://127.0.0.1:8000/v1/proof/{decision_id}"
+```
 
 ## Interpretation Discipline
+
+Nova enforces and proves whether a decision is admissible before execution.
 
 Nova conditions decisions before execution.
 
