@@ -160,8 +160,32 @@ Your system is operating with no control layer.
 
 ## Next Step
 
-Run the comparison script. See your own output.
+Run the comparison script. Observe the difference in validated exposure.
 
-If the numbers change — if Nova would have modified what your system would have done — you have a live gap in your decision validation stack.
+Then route a real decision through Nova:
 
-Close it: [nova-api-ipz6.onrender.com](https://nova-api-ipz6.onrender.com)
+```bash
+curl -s -H "Authorization: Bearer YOUR_API_KEY" \
+  "https://nova-api-ipz6.onrender.com/v1/context?intent=trade&asset=ETH&size=10000"
+```
+
+Read the response:
+
+- `decision_status` -> whether the decision is admissible
+- `constraint_effect` -> how exposure must change
+- `intervention_type` -> what action is enforced
+
+Retrieve proof:
+
+```bash
+curl -s -H "Authorization: Bearer YOUR_API_KEY" \
+  "https://nova-api-ipz6.onrender.com/v1/proof/{decision_id}"
+```
+
+If Nova changes the decision - if size is reduced, blocked, or delayed -
+
+you are seeing a live constraint that your system does not enforce.
+
+That is the gap.
+
+Close it before capital moves.
