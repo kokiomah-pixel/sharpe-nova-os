@@ -65,6 +65,8 @@ def run_with_nova(scenario: Scenario) -> Dict[str, Any]:
     action_policy = context.get("guardrail", {}).get("action_policy", {})
     decision = context.get("decision_status", "ALLOW")
     impact_on_outcomes = context.get("impact_on_outcomes", {})
+    # decision_status and constraint_effect define authority; impact_on_outcomes
+    # remains supporting detail for validated exposure reporting.
     executed_size = impact_on_outcomes.get("adjusted_size", scenario.size)
     constraint_effect = proof.get("constraint_effect", {})
     intervention_type = proof.get("intervention_type")

@@ -6,6 +6,10 @@ actually returns, and flags where production integrity requirements are
 not yet met.
 """
 
+# NOTE:
+# This harness inspects full constraint surfaces.
+# External integrations must bind only to primary decision fields.
+
 from __future__ import annotations
 
 import argparse

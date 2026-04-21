@@ -53,6 +53,25 @@ Proof includes:
 Proof reflects the final governing outcome only.
 Internal logic, scoring, and Reflex Memory structure are not exposed.
 
+## Field Hierarchy
+
+Nova exposes both primary and secondary fields.
+
+Primary fields define the authoritative decision outcome and must be used for integration and audit:
+
+- `decision_status`
+- `constraint_effect`
+- `intervention_type`
+- `failure_class`
+
+Secondary fields provide supporting detail and must not be used as the source of decision authority:
+
+- `impact_on_outcomes`
+- `adjustment`
+- internal constraint calculations
+
+All integrations must bind to primary fields.
+
 Primary root surfaces:
 
 - [START_HERE.md](START_HERE.md)

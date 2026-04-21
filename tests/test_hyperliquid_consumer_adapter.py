@@ -1,3 +1,6 @@
+"""Adapter tests may inspect supporting fields, but consumer authority remains
+bound to primary decision fields and proof outcomes."""
+
 from __future__ import annotations
 
 import importlib

@@ -76,6 +76,8 @@ def fetch_nova_proof(
 def _effective_constraints(nova_response: Dict[str, Any]) -> Dict[str, Any]:
     proof = nova_response.get("proof_surface") or {}
     impact = nova_response.get("impact_on_outcomes") or {}
+    # Proof-layer fields carry authority. impact_on_outcomes remains
+    # supporting detail for effective size handling.
     return {
         "decision_id": nova_response.get("decision_id"),
         "requested_size": (nova_response.get("decision_context") or {}).get("requested_size"),
