@@ -2,6 +2,123 @@
 
 Sharpe Nova OS is a pre-execution decision discipline layer that conditions and verifies whether capital is allowed to move before execution.
 
+## Run One Decision (30 Seconds)
+
+Start the local API:
+
+```bash
+NOVA_API_KEY=mytestkey ./.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+Run a decision:
+
+```bash
+curl -s -H "Authorization: Bearer mytestkey" \
+"http://127.0.0.1:8000/v1/context?intent=allocate&asset=ETH&size=10000"
+```
+
+Example output:
+
+```
+decision_status: CONSTRAIN
+constraint_effect: reduce_exposure
+adjusted_size: 4000
+```
+
+## Proof (Deterministic)
+
+Example:
+
+```
+decision_id: abc123
+reproducibility_hash: xyz789
+```
+
+Same input -> same output -> same proof
+
+Nova decisions are:
+
+- deterministic
+- reproducible
+- auditable
+
+This is not advisory output.
+
+This is enforceable decision validation.
+
+Without Nova:
+
+- 10000 deployed
+
+With Nova:
+
+- 4000 allowed
+
+Nova changed what your system is allowed to do before execution.
+
+## What Changed?
+
+Your system proposes:
+
+- size: 10000
+
+Nova evaluates:
+
+- system conditions
+- reflex memory
+- constraint logic
+
+Nova returns:
+
+- CONSTRAIN
+
+Your system must:
+
+- reduce size to 4000
+- not execute
+
+This is not advice.
+
+This is a constraint on what is allowed to happen.
+
+## When Nova Says No
+
+Example:
+
+```
+intent: increase_risk
+system_state: elevated_fragility
+
+decision_status: VETO
+```
+
+Result:
+
+This decision is not allowed to proceed.
+
+Nova does not optimize decisions.
+
+It blocks unsafe ones before capital moves.
+
+## Enforce the Decision (2 Lines)
+
+```python
+import requests
+
+res = requests.get("http://127.0.0.1:8000/v1/context", params={
+    "intent": "allocate",
+    "asset": "ETH",
+    "size": 10000
+}).json()
+
+if res["decision_status"] != "ALLOW":
+    raise RuntimeError("Decision not permitted under current constraints")
+```
+
+You do not need to change your system.
+
+You only need to respect the output.
+
 ## What This Is
 
 - A pre-execution decision discipline layer
@@ -45,6 +162,17 @@ These define:
 All implementations and operator behavior must adhere to these policies.
 
 These documents are part of the system boundary and must not be treated as optional guidance.
+
+## Start Here (2 Minutes)
+
+1. Run one decision
+2. See how Nova changes it
+3. Observe constraint or veto
+4. Enforce the output before execution
+
+That is the entire system.
+
+Everything else is structure, governance, and proof.
 
 ## Canonical Interface
 
@@ -148,6 +276,22 @@ Evaluate proof through:
 - `failure_class`
 - `memory_influence`
 - `reproducibility_hash`
+
+## Decision Challenge
+
+Take a real decision from your system.
+
+Run it through Nova.
+
+Ask:
+
+- Would this have been allowed?
+- Would exposure have changed?
+- Would this have been blocked?
+
+If the answer is yes:
+
+Your system is operating without a decision discipline layer.
 
 ## Interpretation Discipline
 
