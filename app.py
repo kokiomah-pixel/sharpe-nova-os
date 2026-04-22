@@ -21,6 +21,9 @@ from core.reflex_memory import (
     validate_reflex_memory_state,
 )
 from core.reflex_memory.proof import build_reflex_proof
+from core.reflex_governance_runtime.alert_engine import ReflexGovernanceAlertEngine
+from core.reflex_governance_runtime.collector import collect_governance_record
+from core.reflex_governance_runtime.pattern_engine import detect_structural_patterns
 from key_manager import (
     activate_or_renew_key,
     deactivate_key_by_stripe_customer_id,
@@ -143,6 +146,16 @@ PROOF_LOCK = Lock()
 PROOF_FILE = Path(os.getenv("NOVA_PROOF_FILE", ".proof_registry.json")).expanduser()
 PROOF_RETRIEVAL_AUDIT_FILE = Path(
     os.getenv("NOVA_PROOF_RETRIEVAL_AUDIT_FILE", "proof_retrieval_audit.jsonl")
+).expanduser()
+REFLEX_GOVERNANCE_RECORDS: List[Dict[str, Any]] = []
+REFLEX_GOVERNANCE_RECORDS_FILE = Path(
+    os.getenv("NOVA_REFLEX_GOVERNANCE_RECORDS_FILE", ".reflex_governance_records.jsonl")
+).expanduser()
+REFLEX_GOVERNANCE_SIGNALS_FILE = Path(
+    os.getenv("NOVA_REFLEX_GOVERNANCE_SIGNALS_FILE", ".reflex_governance_signals.json")
+).expanduser()
+REFLEX_GOVERNANCE_ESCALATIONS_FILE = Path(
+    os.getenv("NOVA_REFLEX_GOVERNANCE_ESCALATIONS_FILE", ".reflex_governance_escalations.json")
 ).expanduser()
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
@@ -344,6 +357,24 @@ def _append_jsonl_file(path: Path, entry: Dict[str, Any]) -> None:
         pass
 
 
+def _load_jsonl_file(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    loaded: List[Dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                raw = line.strip()
+                if not raw:
+                    continue
+                item = json.loads(raw)
+                if isinstance(item, dict):
+                    loaded.append(item)
+    except Exception:
+        return []
+    return loaded
+
+
 def _get_redis_usage(api_key: str) -> Dict[str, Any]:
     client = _get_redis_client()
     if not client:
@@ -405,6 +436,11 @@ if not NOVA_REDIS_URL:
     USAGE_TRACKING.update(_load_usage_file())
 BILLING_LEDGER.update(_load_json_file(BILLING_FILE))
 PROOF_REGISTRY.update(_load_json_file(PROOF_FILE))
+REFLEX_GOVERNANCE_RECORDS.extend(_load_jsonl_file(REFLEX_GOVERNANCE_RECORDS_FILE))
+REFLEX_GOVERNANCE_ALERT_ENGINE = ReflexGovernanceAlertEngine(
+    signals_path=REFLEX_GOVERNANCE_SIGNALS_FILE,
+    escalations_path=REFLEX_GOVERNANCE_ESCALATIONS_FILE,
+)
 
 
 def _round_currency(value: float) -> float:
@@ -1324,8 +1360,36 @@ def _attach_proof_to_payload(payload: Dict[str, Any], *, owner: Any) -> Dict[str
     with PROOF_LOCK:
         PROOF_REGISTRY[decision_id] = record
         _write_json_file(PROOF_FILE, PROOF_REGISTRY)
+    _observe_reflex_governance(context_payload=payload, proof_record=record, owner=owner)
     payload["decision_id"] = decision_id
     return payload
+
+
+def _observe_reflex_governance(*, context_payload: Dict[str, Any], proof_record: Dict[str, Any], owner: Any) -> None:
+    # Observational only: governance drift is recorded here, but no decision or proof
+    # path is modified by this runtime.
+    try:
+        governance_record = collect_governance_record(
+            context_payload=context_payload,
+            proof_record=proof_record,
+            reflex_log={"reflex_ids": context_payload.get("reflex_memory", {}).get("active_registry_id")},
+            account_id=str(owner or ""),
+        )
+        REFLEX_GOVERNANCE_RECORDS.append(governance_record)
+        if len(REFLEX_GOVERNANCE_RECORDS) > 2000:
+            del REFLEX_GOVERNANCE_RECORDS[:-2000]
+        _append_jsonl_file(REFLEX_GOVERNANCE_RECORDS_FILE, governance_record)
+        patterns = detect_structural_patterns(
+            REFLEX_GOVERNANCE_RECORDS,
+            now=get_current_datetime(),
+            resolution_history=REFLEX_GOVERNANCE_ALERT_ENGINE.reviewable_resolution_history(),
+        )
+        REFLEX_GOVERNANCE_ALERT_ENGINE.observe_patterns(
+            patterns,
+            observed_at=str(context_payload.get("timestamp_utc") or get_current_timestamp()),
+        )
+    except Exception:
+        pass
 
 
 def _proof_record_for_owner(decision_id: str, owner: Any) -> Optional[Dict[str, Any]]:
