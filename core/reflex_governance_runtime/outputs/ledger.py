@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Dict, Iterable, List
 
+# NOTE:
+# This runtime is strictly observational.
+# It must not modify decision logic, proof output, or system behavior.
+# All governance changes must occur through explicit, versioned updates.
+
 
 def build_reflex_ledger(
     *,

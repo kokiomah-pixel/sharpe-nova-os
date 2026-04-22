@@ -4,6 +4,11 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
+# NOTE:
+# This runtime is strictly observational.
+# It must not modify decision logic, proof output, or system behavior.
+# All governance changes must occur through explicit, versioned updates.
+
 
 SHORT_WINDOW_DAYS = 7
 MEDIUM_WINDOW_DAYS = 30

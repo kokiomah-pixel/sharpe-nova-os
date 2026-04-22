@@ -44,6 +44,11 @@ except Exception:  # pragma: no cover - runtime fallback when stripe isn't insta
 
 load_dotenv()
 
+# NOTE:
+# This runtime is strictly observational.
+# It must not modify decision logic, proof output, or system behavior.
+# All governance changes must occur through explicit, versioned updates.
+
 
 def get_current_timestamp() -> str:
     fixed = os.getenv("NOVA_TIMESTAMP_UTC")

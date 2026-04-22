@@ -3,6 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+# NOTE:
+# This runtime is strictly observational.
+# It must not modify decision logic, proof output, or system behavior.
+# All governance changes must occur through explicit, versioned updates.
+
 
 REQUIRED_FIELDS = {
     "decision_id",

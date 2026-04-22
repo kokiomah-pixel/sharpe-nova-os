@@ -202,6 +202,10 @@ cython_debug/
 # Local runtime state
 .usage.json
 .usage.manual.json
+.proof_registry.json
+.reflex_governance_records.jsonl
+.reflex_governance_signals.json
+.reflex_governance_escalations.json
 keys.json
 .stripe_events.json
 stripe_webhook_audit.jsonl

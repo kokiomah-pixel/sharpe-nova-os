@@ -33,3 +33,20 @@ The repository should be read as an interpretation boundary plus integration sur
 
 Primary decision authority belongs to `decision_status` and proof-layer outcome fields.
 Supporting fields such as `impact_on_outcomes`, `adjustment`, and deeper constraint calculations remain explanatory only.
+
+## Governance Doctrine
+
+Sharpe Nova OS operates under explicit governance discipline:
+
+- Runtime Artifact Policy
+- Signal Pressure Discipline Protocol
+
+These define:
+
+- what is system definition vs runtime state
+- how governance signals are interpreted and acted upon
+- how discipline is preserved under system pressure
+
+All implementations and operator behavior must adhere to these policies.
+
+These documents are part of the system boundary and must not be treated as optional guidance.

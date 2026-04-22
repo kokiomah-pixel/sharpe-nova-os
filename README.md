@@ -29,6 +29,23 @@ Each decision produces a deterministic outcome and a verifiable proof surface.
 
 No interpretation beyond contract is permitted.
 
+## Governance Doctrine
+
+Sharpe Nova OS operates under explicit governance discipline:
+
+- Runtime Artifact Policy
+- Signal Pressure Discipline Protocol
+
+These define:
+
+- what is system definition vs runtime state
+- how governance signals are interpreted and acted upon
+- how discipline is preserved under system pressure
+
+All implementations and operator behavior must adhere to these policies.
+
+These documents are part of the system boundary and must not be treated as optional guidance.
+
 ## Canonical Interface
 
 Nova API is the machine-readable interface to the pre-execution decision layer.

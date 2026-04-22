@@ -5,6 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# NOTE:
+# This runtime is strictly observational.
+# It must not modify decision logic, proof output, or system behavior.
+# All governance changes must occur through explicit, versioned updates.
+
 
 ALLOWED_RESOLUTION_ACTIONS = {"HOLD", "VALIDATE", "DECAY", "REHABILITATE", "FORMALIZE"}
 STRONG_ACTIONS = {"DECAY", "REHABILITATE", "FORMALIZE"}
@@ -175,4 +180,7 @@ class ReflexGovernanceAlertEngine:
         pattern = escalation.get("pattern", {})
         if not isinstance(pattern, dict):
             return False
+        # Operator discipline rule:
+        # strong governance actions require persistence across governance cycles
+        # and demonstrated outcome impact before they are allowed.
         return int(pattern.get("window_days", 0)) >= 30 and bool(pattern.get("affects_outcomes"))

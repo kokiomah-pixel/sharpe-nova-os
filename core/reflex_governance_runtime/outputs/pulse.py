@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Dict, Iterable
 
+# NOTE:
+# This runtime is strictly observational.
+# It must not modify decision logic, proof output, or system behavior.
+# All governance changes must occur through explicit, versioned updates.
+
 
 def _domain_status(signals: Iterable[Dict[str, object]], domain: str, *, watch_label: str, issue_label: str) -> str:
     domain_signals = [signal for signal in signals if signal.get("domain") == domain]

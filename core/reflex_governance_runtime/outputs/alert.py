@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Dict
 
+# NOTE:
+# This runtime is strictly observational.
+# It must not modify decision logic, proof output, or system behavior.
+# All governance changes must occur through explicit, versioned updates.
+
 
 def render_architect_alert(escalation: Dict[str, object]) -> str:
     return "\n".join(
