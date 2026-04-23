@@ -11,11 +11,16 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List
 
-import httpx
+import requests
 
 
-NOVA_API_URL = os.getenv("NOVA_API_URL", "http://127.0.0.1:8000")
-NOVA_API_KEY = os.getenv("NOVA_API_KEY", "your_api_key_here")
+# Default to local API for immediate usability
+DEFAULT_API_URL = "http://127.0.0.1:8000"
+
+# Allow override via environment variable
+API_URL = os.getenv("NOVA_API_URL", DEFAULT_API_URL)
+
+API_KEY = os.getenv("NOVA_API_KEY", "mytestkey")
 
 
 @dataclass(frozen=True)
@@ -32,42 +37,50 @@ def run_without_nova(scenario: Scenario) -> Dict[str, str]:
     }
 
 
+def call_nova(params: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        res = requests.get(
+            f"{API_URL}/v1/context",
+            headers={"Authorization": f"Bearer {API_KEY}"},
+            params=params,
+            timeout=20,
+        )
+
+        if res.status_code == 403:
+            raise RuntimeError(
+                "Nova API returned 403.\n\n"
+                "If using the hosted endpoint, ensure your API key is valid.\n"
+                "For local testing, run the API locally and set:\n\n"
+                "NOVA_API_URL=http://127.0.0.1:8000\n"
+                "NOVA_API_KEY=mytestkey\n"
+            )
+
+        res.raise_for_status()
+        return res.json()
+
+    except requests.exceptions.ConnectionError as exc:
+        raise RuntimeError(
+            "Unable to reach Nova API.\n\n"
+            "Start the local server:\n"
+            "NOVA_API_KEY=mytestkey ./.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000\n"
+        ) from exc
+
+
 def fetch_nova_context(scenario: Scenario) -> Dict[str, Any]:
-    endpoint = f"{NOVA_API_URL.rstrip('/')}/v1/context"
     params = {
         "intent": scenario.intent,
         "asset": scenario.asset,
         "size": scenario.size,
     }
-    headers = {"Authorization": f"Bearer {NOVA_API_KEY}"}
-
-    with httpx.Client(timeout=20.0) as client:
-        response = client.get(endpoint, params=params, headers=headers)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 403:
-                raise RuntimeError(
-                    "Nova returned 403 Forbidden.\n"
-                    "Check credentials/target environment:\n"
-                    "1) If running locally, start API and export:\n"
-                    "   NOVA_API_URL=http://127.0.0.1:8000\n"
-                    "   NOVA_API_KEY=mytestkey\n"
-                    "2) If using remote, set a valid remote key in NOVA_API_KEY.\n"
-                    f"Current target: {NOVA_API_URL}"
-                ) from exc
-            raise
-        return response.json()
+    return call_nova(params)
 
 
 def fetch_nova_proof(decision_id: str) -> Dict[str, Any]:
-    endpoint = f"{NOVA_API_URL.rstrip('/')}/v1/proof/{decision_id}"
-    headers = {"Authorization": f"Bearer {NOVA_API_KEY}"}
-
-    with httpx.Client(timeout=20.0) as client:
-        response = client.get(endpoint, headers=headers)
-        response.raise_for_status()
-        return response.json()
+    endpoint = f"{API_URL.rstrip('/')}/v1/proof/{decision_id}"
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    response = requests.get(endpoint, headers=headers, timeout=20)
+    response.raise_for_status()
+    return response.json()
 
 
 def is_risk_increasing_intent(intent: str) -> bool:
@@ -190,10 +203,8 @@ def print_scenario_comparison(scenario: Scenario) -> Dict[str, Any]:
 
 
 def main() -> None:
-    if NOVA_API_URL.rstrip("/") == "http://127.0.0.1:8000":
-        print("Using local Nova API default: http://127.0.0.1:8000")
-        print("Set NOVA_API_URL to override this target.")
-        print()
+    print(f"Using Nova API: {API_URL}")
+    print()
 
     scenarios: List[Scenario] = [
         Scenario("trade", "ETH", 10000),
