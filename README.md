@@ -102,6 +102,8 @@ It blocks unsafe ones before capital moves.
 
 ## Enforce the Decision (2 Lines)
 
+For live system design, see [docs/continuous_integration_loop.md](docs/continuous_integration_loop.md).
+
 ```python
 import requests
 
