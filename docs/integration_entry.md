@@ -19,6 +19,6 @@ Sharpe Nova OS integrates through a machine-readable API contract.
 
 ## Integration Boundary
 
-No integration should reinterpret Nova output as optional guidance.
+No integration should reinterpret Nova output as a bypassable suggestion.
 
 The response contract is authoritative, and proof fields should be read from the proof endpoint rather than inferred from internal traces.

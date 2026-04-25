@@ -49,4 +49,4 @@ These define:
 
 All implementations and operator behavior must adhere to these policies.
 
-These documents are part of the system boundary and must not be treated as optional guidance.
+These documents are part of the system boundary and must be enforced as binding integration doctrine.

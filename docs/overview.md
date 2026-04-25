@@ -32,3 +32,4 @@ The system is designed so that:
 - refusal states are explicit
 - governance layers are visible
 - downstream systems inherit discipline through the API contract
+- execution proceeds only after decision admission

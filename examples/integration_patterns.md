@@ -16,7 +16,7 @@ Examples in this repository are controlled integration patterns for Sharpe Nova 
 - execute trades
 - optimize strategies
 - bypass governance
-- treat refusal states as advisory only
+- treat refusal states as non-binding
 
 ## Current Example Set
 

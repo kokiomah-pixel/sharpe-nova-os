@@ -1,6 +1,6 @@
 # Status: REQUIRED — Institutional Infrastructure Enforcement
 
-This document is not guidance.
+This document is binding repository policy.
 
 This document defines mandatory access control standards for Sharpe Nova OS.
 
