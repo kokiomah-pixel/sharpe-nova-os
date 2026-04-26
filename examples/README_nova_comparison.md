@@ -3,7 +3,7 @@
 This demo compares two agent behaviors on the same scenarios:
 
 - WITHOUT Nova: always executes requested action.
-- WITH Nova: calls `/v1/context`, reads `guardrail.action_policy`, then decides `ALLOW`, `CONSTRAIN`, or `VETO`.
+- WITH Nova: calls `/v1/context`, binds to `decision_status`, and applies `constraint_effect` before any execution step.
 
 These examples demonstrate how Nova conditions decision context.
 They do not represent trading signals or execution instructions.

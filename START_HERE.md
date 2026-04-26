@@ -22,5 +22,5 @@ If you are new to the repository, read in this order:
 - Nova conditions capital before execution.
 - `/v1/context` governs admission and returns `decision_id`.
 - `/v1/proof/{decision_id}` returns the authoritative audit surface.
-- Nova is not a trading system, signal engine, or execution framework.
+- Nova is not a trading system or execution framework.
 - Execution without Nova admission is outside system discipline.

@@ -67,7 +67,7 @@ Nova is not:
 
 - an execution engine
 - a strategy optimizer
-- a signal engine
+- a signal-producing strategy system
 - a queue runner
 - an autonomous business workflow agent
 
@@ -361,7 +361,7 @@ All proof must still preserve:
 
 ---
 
-# 5. Implementation Guardrails
+# 5. Implementation Governance Constraints
 
 ## Must Do
 - preserve venue-agnostic API behavior

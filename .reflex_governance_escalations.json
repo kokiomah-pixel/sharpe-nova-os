@@ -64,7 +64,7 @@
     "domain": "classification",
     "escalation_id": "escalation::classification_inconsistency:{\"asset\":\"BTC\",\"intent\":\"risk_increasing\",\"requested_action\":\"trade\"}:30",
     "flag": "classification_inconsistency",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "classification",
@@ -138,7 +138,7 @@
     "domain": "classification",
     "escalation_id": "escalation::classification_inconsistency:{\"asset\":\"ETH\",\"intent\":\"risk_increasing\",\"requested_action\":\"trade\"}:30",
     "flag": "classification_inconsistency",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "classification",
@@ -179,7 +179,7 @@
     "domain": "classification",
     "escalation_id": "escalation::classification_inconsistency:{\"asset\":\"ETH\",\"intent\":\"risk_increasing\",\"requested_action\":\"trade\"}:7",
     "flag": "classification_inconsistency",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "classification",
@@ -220,7 +220,7 @@
     "domain": "classification",
     "escalation_id": "escalation::classification_inconsistency:{\"asset\":\"ETH\",\"intent\":\"risk_reducing\",\"requested_action\":\"reduce_position\"}:30",
     "flag": "classification_inconsistency",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "classification",
@@ -258,7 +258,7 @@
     "domain": "classification",
     "escalation_id": "escalation::classification_inconsistency:{\"asset\":\"ETH\",\"intent\":\"risk_reducing\",\"requested_action\":\"reduce_position\"}:7",
     "flag": "classification_inconsistency",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "classification",
@@ -296,7 +296,7 @@
     "domain": "proof",
     "escalation_id": "escalation::determinism_violation:{\"asset\":\"BTC\",\"intent\":\"risk_increasing\",\"requested_action\":\"trade\"}:30",
     "flag": "determinism_violation",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -368,7 +368,7 @@
     "domain": "proof",
     "escalation_id": "escalation::determinism_violation:{\"asset\":\"ETH\",\"intent\":\"risk_increasing\",\"requested_action\":\"trade\"}:30",
     "flag": "determinism_violation",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -410,7 +410,7 @@
     "domain": "proof",
     "escalation_id": "escalation::determinism_violation:{\"asset\":\"ETH\",\"intent\":\"risk_increasing\",\"requested_action\":\"trade\"}:7",
     "flag": "determinism_violation",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -452,7 +452,7 @@
     "domain": "proof",
     "escalation_id": "escalation::determinism_violation:{\"asset\":\"ETH\",\"intent\":\"risk_reducing\",\"requested_action\":\"reduce_position\"}:30",
     "flag": "determinism_violation",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -492,7 +492,7 @@
     "domain": "proof",
     "escalation_id": "escalation::determinism_violation:{\"asset\":\"ETH\",\"intent\":\"risk_reducing\",\"requested_action\":\"reduce_position\"}:7",
     "flag": "determinism_violation",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -604,17 +604,17 @@
     "domain": "reflex",
     "escalation_id": "escalation::ineffective_reflex:global:30",
     "flag": "ineffective_reflex",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": false,
       "domain": "reflex",
       "evidence": {
-        "count": 35
+        "count": 37
       },
       "first_seen": "2026-04-13T12:00:10+00:00",
       "flag": "ineffective_reflex",
-      "last_seen": "2026-04-22T16:20:27.524275+00:00",
-      "occurrences": 35,
+      "last_seen": "2026-04-26T01:20:51.976505+00:00",
+      "occurrences": 37,
       "pattern_key": "ineffective_reflex:global:30",
       "scope": "global",
       "window_days": 30
@@ -633,17 +633,17 @@
     "domain": "reflex",
     "escalation_id": "escalation::ineffective_reflex:global:7",
     "flag": "ineffective_reflex",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": false,
       "domain": "reflex",
       "evidence": {
-        "count": 31
+        "count": 33
       },
       "first_seen": "2026-04-20T10:00:00+00:00",
       "flag": "ineffective_reflex",
-      "last_seen": "2026-04-22T16:20:27.524275+00:00",
-      "occurrences": 31,
+      "last_seen": "2026-04-26T01:20:51.976505+00:00",
+      "occurrences": 33,
       "pattern_key": "ineffective_reflex:global:7",
       "scope": "global",
       "window_days": 7
@@ -662,18 +662,18 @@
     "domain": "reflex",
     "escalation_id": "escalation::overactive_reflex:None:30",
     "flag": "overactive_reflex",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "reflex",
       "evidence": {
-        "activation_count": 119,
+        "activation_count": 121,
         "reflex_id": "None"
       },
       "first_seen": "2026-04-13T12:00:00+00:00",
       "flag": "overactive_reflex",
-      "last_seen": "2026-04-22T16:20:27.524275+00:00",
-      "occurrences": 119,
+      "last_seen": "2026-04-26T01:20:51.976505+00:00",
+      "occurrences": 121,
       "pattern_key": "overactive_reflex:None:30",
       "scope": "None",
       "window_days": 30
@@ -692,18 +692,18 @@
     "domain": "reflex",
     "escalation_id": "escalation::overactive_reflex:None:7",
     "flag": "overactive_reflex",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "reflex",
       "evidence": {
-        "activation_count": 109,
+        "activation_count": 111,
         "reflex_id": "None"
       },
       "first_seen": "2026-04-20T10:00:00+00:00",
       "flag": "overactive_reflex",
-      "last_seen": "2026-04-22T16:20:27.524275+00:00",
-      "occurrences": 109,
+      "last_seen": "2026-04-26T01:20:51.976505+00:00",
+      "occurrences": 111,
       "pattern_key": "overactive_reflex:None:7",
       "scope": "None",
       "window_days": 7
@@ -722,7 +722,7 @@
     "domain": "reflex",
     "escalation_id": "escalation::overactive_reflex:elevated_fragility_size_brake:30",
     "flag": "overactive_reflex",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "reflex",
@@ -752,7 +752,7 @@
     "domain": "reflex",
     "escalation_id": "escalation::overactive_reflex:elevated_fragility_size_brake:7",
     "flag": "overactive_reflex",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "reflex",
@@ -782,7 +782,7 @@
     "domain": "proof",
     "escalation_id": "escalation::proof_mismatch:global:30",
     "flag": "proof_mismatch",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -811,7 +811,7 @@
     "domain": "proof",
     "escalation_id": "escalation::proof_mismatch:global:7",
     "flag": "proof_mismatch",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -840,7 +840,7 @@
     "domain": "proof",
     "escalation_id": "escalation::reproducibility_failure:{\"asset\":\"BTC\",\"intent\":\"risk_increasing\",\"requested_action\":\"trade\"}:30",
     "flag": "reproducibility_failure",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -898,7 +898,7 @@
     "domain": "proof",
     "escalation_id": "escalation::reproducibility_failure:{\"asset\":\"ETH\",\"intent\":\"risk_increasing\",\"requested_action\":\"trade\"}:30",
     "flag": "reproducibility_failure",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -927,7 +927,7 @@
     "domain": "proof",
     "escalation_id": "escalation::reproducibility_failure:{\"asset\":\"ETH\",\"intent\":\"risk_increasing\",\"requested_action\":\"trade\"}:7",
     "flag": "reproducibility_failure",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -956,7 +956,7 @@
     "domain": "proof",
     "escalation_id": "escalation::reproducibility_failure:{\"asset\":\"ETH\",\"intent\":\"risk_reducing\",\"requested_action\":\"reduce_position\"}:30",
     "flag": "reproducibility_failure",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -985,7 +985,7 @@
     "domain": "proof",
     "escalation_id": "escalation::reproducibility_failure:{\"asset\":\"ETH\",\"intent\":\"risk_reducing\",\"requested_action\":\"reduce_position\"}:7",
     "flag": "reproducibility_failure",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": true,
       "domain": "proof",
@@ -1072,17 +1072,17 @@
     "domain": "classification",
     "escalation_id": "escalation::unclassified_decisions:global:30",
     "flag": "unclassified_decisions",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": false,
       "domain": "classification",
       "evidence": {
-        "count": 35
+        "count": 37
       },
       "first_seen": "2026-04-13T12:00:10+00:00",
       "flag": "unclassified_decisions",
-      "last_seen": "2026-04-22T16:20:27.524275+00:00",
-      "occurrences": 35,
+      "last_seen": "2026-04-26T01:20:51.976505+00:00",
+      "occurrences": 37,
       "pattern_key": "unclassified_decisions:global:30",
       "scope": "global",
       "window_days": 30
@@ -1101,17 +1101,17 @@
     "domain": "classification",
     "escalation_id": "escalation::unclassified_decisions:global:7",
     "flag": "unclassified_decisions",
-    "last_seen": "2026-04-22T16:20:27.524275+00:00",
+    "last_seen": "2026-04-26T01:20:51.976505+00:00",
     "pattern": {
       "affects_outcomes": false,
       "domain": "classification",
       "evidence": {
-        "count": 31
+        "count": 33
       },
       "first_seen": "2026-04-20T10:00:00+00:00",
       "flag": "unclassified_decisions",
-      "last_seen": "2026-04-22T16:20:27.524275+00:00",
-      "occurrences": 31,
+      "last_seen": "2026-04-26T01:20:51.976505+00:00",
+      "occurrences": 33,
       "pattern_key": "unclassified_decisions:global:7",
       "scope": "global",
       "window_days": 7

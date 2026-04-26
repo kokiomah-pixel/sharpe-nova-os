@@ -17,7 +17,6 @@ Its primary function is to condition capital before execution by evaluating whet
 Sharpe Nova OS is not:
 
 - a trading system
-- a signal engine
 - an execution engine
 - a generic agent toolkit
 
@@ -31,7 +30,7 @@ Sharpe Nova OS is not:
 
 The repository should be read as an interpretation boundary plus integration surface. Any downstream system should bind to the Nova API contract rather than infer a broader role.
 
-Primary decision authority belongs to `decision_status` and proof-layer outcome fields.
+Primary decision authority belongs to `decision_status`, `constraint_effect`, `intervention_type`, `failure_class`, and proof-layer outcome fields.
 Supporting fields such as `impact_on_outcomes`, `adjustment`, and deeper constraint calculations remain explanatory only.
 
 ## Governance Doctrine

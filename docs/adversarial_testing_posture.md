@@ -16,7 +16,7 @@ Nova is designed to remain:
 
 - deny-first
 - proof-backed
-- non-bypassable
+- aligned to non-bypass doctrine
 - fail-closed
 - externally authoritative
 - non-adaptive

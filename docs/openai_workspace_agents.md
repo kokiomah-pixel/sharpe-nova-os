@@ -1,8 +1,10 @@
 # OpenAI Workspace Agent Integration
 
-Workspace agents may propose actions.
+OpenAI workspace agents may propose actions.
 
-Nova determines if those actions are admissible.
+Nova determines decision admission before capital-moving execution.
+
+Nova remains external, model-agnostic, and binding.
 
 ## Required Flow
 
@@ -10,10 +12,11 @@ Agent -> Decision Proposal -> Nova -> Execution
 
 ## Rules
 
-- Agent must call Nova before execution
-- decision_status is binding
-- Agent may not treat reasoning as permission
-- Agent must retrieve proof when required
+- Agent must call `/v1/context` before execution
+- `decision_status` is binding
+- Agent may not treat its own reasoning as permission
+- Agent may retrieve `/v1/proof/{decision_id}` when proof-backed verification is required
+- Refusal states must fail closed
 
 ## Outcome Handling
 

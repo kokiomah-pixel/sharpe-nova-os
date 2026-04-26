@@ -24,7 +24,7 @@ It is not a representation of live performance.
 - Params: intent=trade, asset=ETH, size=10000
 - Configured Decision Regime: Stress
 - Severity: high
-- Advisory: Do not initiate new risk. Only reduce or exit existing exposure.
+- Governed constraint: Do not initiate new risk. Only reduce or exit existing exposure.
 - Action Policy: allow_new_risk=false, allow_risk_reduction=true, allow_position_increase=false, allow_position_decrease=true
 - Outcome: VETO
 
@@ -33,7 +33,7 @@ It is not a representation of live performance.
 - Params: intent=deploy_liquidity, asset=ETH, size=10000
 - Configured Decision Regime: Stress
 - Severity: high
-- Advisory: Do not initiate new risk. Only reduce or exit existing exposure.
+- Governed constraint: Do not initiate new risk. Only reduce or exit existing exposure.
 - Action Policy: allow_new_risk=false, allow_risk_reduction=true, allow_position_increase=false, allow_position_decrease=true
 - Outcome: VETO
 
@@ -42,7 +42,7 @@ It is not a representation of live performance.
 - Params: intent=trade, asset=BTC, size=50000
 - Configured Decision Regime: Stress
 - Severity: high
-- Advisory: Do not initiate new risk. Only reduce or exit existing exposure.
+- Governed constraint: Do not initiate new risk. Only reduce or exit existing exposure.
 - Action Policy: allow_new_risk=false, allow_risk_reduction=true, allow_position_increase=false, allow_position_decrease=true
 - Outcome: VETO
 
@@ -57,7 +57,7 @@ It is not a representation of live performance.
 - Params: intent=trade, asset=ETH, size=10000
 - Configured Decision Regime: Elevated Fragility
 - Severity: medium
-- Advisory: Proceed with caution. Reduce exposure and tighten controls.
+- Governed constraint: Reduce exposure and tighten controls before execution.
 - Action Policy: allow_new_risk=true, allow_risk_reduction=true, allow_position_increase=false, allow_position_decrease=true
 - Outcome: CONSTRAIN
 
@@ -66,7 +66,7 @@ It is not a representation of live performance.
 - Params: intent=deploy_liquidity, asset=ETH, size=10000
 - Configured Decision Regime: Elevated Fragility
 - Severity: medium
-- Advisory: Reduce size and avoid low-liquidity venues.
+- Governed constraint: Reduce size and avoid low-liquidity venues.
 - Action Policy: allow_new_risk=true, allow_risk_reduction=true, allow_position_increase=false, allow_position_decrease=true
 - Outcome: CONSTRAIN
 
@@ -81,6 +81,6 @@ It is not a representation of live performance.
 - Params: intent=trade, asset=ETH, size=10000
 - Configured Decision Regime: Stable
 - Severity: low
-- Advisory: Proceed under normal risk controls.
+- Governed output: Proceed under normal risk controls.
 - Action Policy: allow_new_risk=true, allow_risk_reduction=true, allow_position_increase=true, allow_position_decrease=true
 - Outcome: ALLOW

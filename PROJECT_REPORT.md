@@ -28,7 +28,7 @@ Nova meters **decision value**, not introspection or system management. This mea
 
 These endpoints increment usage counters and consume monthly quota:
 
-- `GET /v1/context` – guardrails, reflex memory, and configured decision regime transitions for a deployment
+- `GET /v1/context` – decision admission, reflex memory, and configured decision regime transitions for a deployment
 - `GET /v1/regime` – current configured decision regime and epoch
 - `GET /v1/epoch` – epoch hash and constitution snapshot
 

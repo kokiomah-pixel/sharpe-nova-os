@@ -1,94 +1,68 @@
-# Sharpe Nova OS — Developer Integration Doctrine
+# Sharpe Nova OS
 
-## Repository Role
+Sharpe Nova OS is a pre-execution decision discipline layer that conditions, enforces, and proves whether capital is allowed to move before execution.
 
-This repository provides developer doctrine and integration rules for Sharpe Nova OS.
+This repository is the canonical Sharpe Nova OS system repo. It contains the Nova API, proof layer, governance runtime, canonical specs, tests, and runnable examples.
 
-The canonical system, API, proof layer, and runtime live in:
+## Canonical Decision Contract
 
--> https://github.com/kokiomah-pixel/sharpe-nova-os
+- `/v1/context` returns the governed decision and authoritative `decision_status`
+- `/v1/proof/{decision_id}` verifies the governed decision with proof-backed governance fields
 
-This repository defines:
+Nova is authoritative and auditable. Downstream systems must bind execution behavior to the governed decision returned by `/v1/context`.
 
-- how Nova must be integrated
-- how decision admission must be enforced
-- how non-bypass behavior is maintained
-- how proof must be retrieved and used
+## What Lives Here
 
-This repository does NOT implement Nova.
+- API implementation and runtime behavior
+- proof generation and retrieval
+- governance specifications and system contracts
+- tests for decision admission and proof integrity
+- examples showing one-decision flows and integration behavior
 
-It defines how Nova is used correctly.
+## What Nova Is Not
 
-Sharpe Nova OS is a pre-execution decision discipline layer that conditions and verifies whether capital is allowed to move before execution.
+Nova is not an execution engine or a strategy system. It does not move capital on its own. It determines whether a proposed capital action is admitted, constrained, delayed, denied, halted, or vetoed before execution can occur.
 
-## What This Means
+## Run One Decision
 
-Nova does not:
+From the repository root:
 
-- generate trades
-- optimize strategies
-- provide discretionary recommendations
+```bash
+./.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
+```
 
-Nova determines:
+In another terminal:
 
-> whether a proposed capital action is allowed to proceed.
+```bash
+curl -s "http://127.0.0.1:8000/v1/context?intent=trade&asset=ETH&size=10000" \
+  -H "x-api-key: mytestkey"
+```
 
-## Integration Model
+Read `decision_status` first. If the response returns `CONSTRAIN`, apply the governed adjustment before any execution step. If the response returns `DENY`, `DELAY`, `HALT`, or `VETO`, do not execute.
 
-All capital-moving decisions must follow:
+## Retrieve Proof
 
-Decision -> Nova -> Execution (only if admitted)
+After receiving a `decision_id` from `/v1/context`:
 
-Nova returns:
+```bash
+curl -s "http://127.0.0.1:8000/v1/proof/<decision_id>" \
+  -H "x-api-key: mytestkey"
+```
 
-- decision_status (authoritative)
-- constraint_effect
-- intervention_type
-- reproducibility_hash
+`/v1/proof/{decision_id}` verifies the governed decision. It does not replace `decision_status` as execution authority.
 
-## Decision Authority
+## End-to-End Decision Flow
 
-decision_status is binding:
+See a complete example of decision admission, enforcement, and proof:
 
-- ALLOW -> proceed
-- CONSTRAIN -> adjust before execution
-- DENY / DELAY / HALT / VETO -> do not execute
+[examples/nova_end_to_end_decision_flow.md](examples/nova_end_to_end_decision_flow.md)
 
-## Non-Bypass Rule
+## Read Next
 
-Nova must be called before execution.
+1. [START_HERE.md](START_HERE.md)
+2. [docs/overview.md](docs/overview.md)
+3. [docs/integration_entry.md](docs/integration_entry.md)
+4. [specs/decision_admission_contract.json](specs/decision_admission_contract.json)
 
-- No internal reasoning is considered permission
-- No retries around denial states
-- No execution without admission
-
-## Proof Requirement
-
-All governed decisions produce:
-
-- decision_id
-- decision_status
-- constraint_effect
-- reproducibility_hash
-
-Proof must be retrievable via `/v1/proof/{decision_id}`
-
-## Repository Purpose
-
-This repo defines:
-
-- correct integration patterns
-- continuous decision loops
-- agent enforcement rules
-- workplace agent governance
-- MCP tool usage
-
-This repo does NOT:
-
-- host Nova runtime
-- modify Nova behavior
-- provide execution systems
-
-## Canonical System
-
-https://github.com/kokiomah-pixel/sharpe-nova-os
+For developer integration doctrine, see:
+https://github.com/kokiomah-pixel/nova-developer-docs
